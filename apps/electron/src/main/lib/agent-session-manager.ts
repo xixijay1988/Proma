@@ -102,17 +102,19 @@ export function createAgentSession(
   title?: string,
   channelId?: string,
   workspaceId?: string,
-  agentEngine: AgentEngine = DEFAULT_AGENT_ENGINE,
+  agentEngine?: AgentEngine,
 ): AgentSessionMeta {
   const index = readIndex()
   const now = Date.now()
+  const workspace = workspaceId ? getAgentWorkspace(workspaceId) : undefined
+  const resolvedAgentEngine = agentEngine ?? workspace?.agentEngine ?? DEFAULT_AGENT_ENGINE
 
   const meta: AgentSessionMeta = {
     id: randomUUID(),
     title: title || '新 Agent 会话',
     channelId,
     workspaceId,
-    agentEngine,
+    agentEngine: resolvedAgentEngine,
     createdAt: now,
     updatedAt: now,
   }
@@ -124,36 +126,33 @@ export function createAgentSession(
   getAgentSessionsDir()
 
   // 若有工作区，创建 session 级别子文件夹并初始化 .claude / .context
-  if (workspaceId) {
-    const ws = getAgentWorkspace(workspaceId)
-    if (ws) {
-      const sessionDir = getAgentSessionWorkspacePath(ws.slug, meta.id)
+  if (workspace) {
+    const sessionDir = getAgentSessionWorkspacePath(workspace.slug, meta.id)
 
-      // 初始化 .claude/settings.json（plansDirectory → .context）
-      const claudeDir = join(sessionDir, '.claude')
-      if (!existsSync(claudeDir)) mkdirSync(claudeDir, { recursive: true })
-      const settingsPath = join(claudeDir, 'settings.json')
-      let sdkSettings: Record<string, unknown> = {}
-      try {
-        sdkSettings = JSON.parse(readFileSync(settingsPath, 'utf-8'))
-      } catch { /* 文件不存在或解析失败 */ }
-      let needsWrite = false
-      if (sdkSettings.plansDirectory !== '.context') {
-        sdkSettings.plansDirectory = '.context'
-        needsWrite = true
-      }
-      if (sdkSettings.skipWebFetchPreflight !== true) {
-        sdkSettings.skipWebFetchPreflight = true
-        needsWrite = true
-      }
-      if (needsWrite) {
-        writeFileSync(settingsPath, JSON.stringify(sdkSettings, null, 2))
-      }
-
-      // 初始化 .context/ 目录
-      const contextDir = join(sessionDir, '.context')
-      if (!existsSync(contextDir)) mkdirSync(contextDir, { recursive: true })
+    // 初始化 .claude/settings.json（plansDirectory → .context）
+    const claudeDir = join(sessionDir, '.claude')
+    if (!existsSync(claudeDir)) mkdirSync(claudeDir, { recursive: true })
+    const settingsPath = join(claudeDir, 'settings.json')
+    let sdkSettings: Record<string, unknown> = {}
+    try {
+      sdkSettings = JSON.parse(readFileSync(settingsPath, 'utf-8'))
+    } catch { /* 文件不存在或解析失败 */ }
+    let needsWrite = false
+    if (sdkSettings.plansDirectory !== '.context') {
+      sdkSettings.plansDirectory = '.context'
+      needsWrite = true
     }
+    if (sdkSettings.skipWebFetchPreflight !== true) {
+      sdkSettings.skipWebFetchPreflight = true
+      needsWrite = true
+    }
+    if (needsWrite) {
+      writeFileSync(settingsPath, JSON.stringify(sdkSettings, null, 2))
+    }
+
+    // 初始化 .context/ 目录
+    const contextDir = join(sessionDir, '.context')
+    if (!existsSync(contextDir)) mkdirSync(contextDir, { recursive: true })
   }
 
   console.log(`[Agent 会话] 已创建会话: ${meta.title} (${meta.id})`)

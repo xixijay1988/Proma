@@ -152,7 +152,7 @@ export function reorderAgentWorkspaces(orderedIds: string[]): AgentWorkspace[] {
   for (const ws of byId.values()) reordered.push(ws)
   index.workspaces = reordered
   writeIndex(index)
-  return reordered
+  return reordered.map(normalizeAgentWorkspace)
 }
 
 export function getAgentWorkspace(id: string): AgentWorkspace | undefined {

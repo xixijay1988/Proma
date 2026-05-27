@@ -96,7 +96,7 @@ import { AgentSessionProvider } from '@/contexts/session-context'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import type { AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage } from '@proma/shared'
-import { MAX_ATTACHMENT_SIZE } from '@proma/shared'
+import { DEFAULT_AGENT_ENGINE, MAX_ATTACHMENT_SIZE } from '@proma/shared'
 import { fileToBase64, formatFileNames, getFileParentPath } from '@/lib/file-utils'
 
 /** 稳定的空 SDKMessage 数组引用，避免 ?? [] 每次创建新引用 */
@@ -1591,7 +1591,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
     try {
       const currentWorkspace = workspaces.find((w) => w.id === currentWorkspaceId)
-      const agentEngine = currentWorkspace?.agentEngine ?? 'claude-sdk'
+      const agentEngine = currentWorkspace?.agentEngine ?? DEFAULT_AGENT_ENGINE
       const meta = await window.electronAPI.createAgentSession(
         undefined, agentChannelId, currentWorkspaceId || undefined, agentEngine,
       )
