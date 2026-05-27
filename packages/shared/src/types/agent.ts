@@ -32,6 +32,12 @@ export const MEMORY_IPC_CHANNELS = {
 
 // ===== Agent 工作区 =====
 
+/** Agent 底层运行引擎 */
+export type AgentEngine = 'claude-sdk' | 'pi'
+
+/** 默认 Agent 引擎 */
+export const DEFAULT_AGENT_ENGINE: AgentEngine = 'claude-sdk'
+
 /** Agent 工作区 */
 export interface AgentWorkspace {
   /** 工作区唯一标识 */
@@ -40,6 +46,8 @@ export interface AgentWorkspace {
   name: string
   /** URL-safe 目录名（创建后不可变） */
   slug: string
+  /** 工作区使用的 Agent 引擎；缺省视为 claude-sdk */
+  agentEngine?: AgentEngine
   /** 创建时间戳 */
   createdAt: number
   /** 更新时间戳 */
@@ -547,6 +555,8 @@ export interface AgentSessionMeta {
   sdkSessionId?: string
   /** 所属工作区 ID */
   workspaceId?: string
+  /** 会话创建时绑定的 Agent 引擎；缺省视为 claude-sdk */
+  agentEngine?: AgentEngine
   /** 是否置顶 */
   pinned?: boolean
   /** 是否已归档 */
