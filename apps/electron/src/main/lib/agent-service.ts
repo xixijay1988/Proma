@@ -305,7 +305,13 @@ export function isAgentSessionActive(sessionId: string): boolean {
 
 /** 中止所有活跃的 Agent 会话（应用退出时调用） */
 export function stopAllAgents(): void {
-  orchestrator.stopAll()
+  try {
+    orchestrator.stopAll()
+  } finally {
+    // registry 管理所有 adapter 生命周期；各 adapter 的 dispose() 必须保持幂等，
+    // 因为 orchestrator.stopAll() 已经会释放当前持有的 Claude adapter。
+    adapterRegistry.dispose()
+  }
 }
 
 /**

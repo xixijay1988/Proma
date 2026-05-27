@@ -6,41 +6,65 @@ export interface NamedAgentAdapter extends AgentProviderAdapter {
   readonly name: AgentEngine
 }
 
-export class AgentAdapterRegistry {
-  private readonly adapters = new Map<AgentEngine, NamedAgentAdapter>()
+export interface AgentAdapterEntry {
+  readonly name: AgentEngine
+  readonly adapter: AgentProviderAdapter
+}
 
-  constructor(adapters: NamedAgentAdapter[]) {
-    for (const adapter of adapters) {
-      this.adapters.set(adapter.name, adapter)
+interface RegisteredAgentAdapterEntry extends AgentAdapterEntry {
+  readonly adapter: NamedAgentAdapter
+}
+
+export class AgentAdapterRegistry {
+  private readonly adapters = new Map<AgentEngine, RegisteredAgentAdapterEntry>()
+
+  constructor(entries: AgentAdapterEntry[]) {
+    for (const entry of entries) {
+      if (!isNamedAgentAdapter(entry.name, entry.adapter)) {
+        throw new Error(`Agent 适配器名称不匹配: ${entry.name}`)
+      }
+      const registeredEntry: RegisteredAgentAdapterEntry = {
+        name: entry.name,
+        adapter: entry.adapter,
+      }
+      this.adapters.set(entry.name, registeredEntry)
     }
   }
 
   get(engine: AgentEngine): NamedAgentAdapter {
-    const adapter = this.adapters.get(engine)
-    if (!adapter) {
+    const entry = this.adapters.get(engine)
+    if (!entry) {
       throw new Error(`不支持的 Agent 引擎: ${engine}`)
     }
-    return adapter
+    return entry.adapter
+  }
+
+  getNamed(engine: AgentEngine): AgentAdapterEntry {
+    const entry = this.adapters.get(engine)
+    if (!entry) {
+      throw new Error(`不支持的 Agent 引擎: ${engine}`)
+    }
+    return entry
   }
 
   dispose(): void {
-    for (const adapter of this.adapters.values()) {
-      adapter.dispose()
+    for (const entry of this.adapters.values()) {
+      entry.adapter.dispose()
     }
   }
 }
 
-function withAgentAdapterName(
+function isNamedAgentAdapter(
   name: AgentEngine,
   adapter: AgentProviderAdapter,
-): NamedAgentAdapter {
-  return Object.assign(adapter, { name })
+): adapter is NamedAgentAdapter {
+  return 'name' in adapter && adapter.name === name
 }
 
 export function createAgentAdapterRegistry(): AgentAdapterRegistry {
   return new AgentAdapterRegistry([
-    withAgentAdapterName('claude-sdk', new ClaudeAgentAdapter()),
-    new PiAgentAdapter(),
+    { name: 'claude-sdk', adapter: new ClaudeAgentAdapter() },
+    { name: 'pi', adapter: new PiAgentAdapter() },
   ])
 }
 
