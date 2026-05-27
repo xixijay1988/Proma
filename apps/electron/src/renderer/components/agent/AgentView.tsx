@@ -95,8 +95,8 @@ import { useOpenSession } from '@/hooks/useOpenSession'
 import { AgentSessionProvider } from '@/contexts/session-context'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
-import type { AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage } from '@proma/shared'
-import { MAX_ATTACHMENT_SIZE } from '@proma/shared'
+import type { AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage, AgentEngine } from '@proma/shared'
+import { DEFAULT_AGENT_ENGINE, MAX_ATTACHMENT_SIZE } from '@proma/shared'
 import { fileToBase64, formatFileNames, getFileParentPath } from '@/lib/file-utils'
 
 /** 稳定的空 SDKMessage 数组引用，避免 ?? [] 每次创建新引用 */
@@ -353,15 +353,26 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   const setDraftSessionIds = useSetAtom(draftSessionIdsAtom)
   const globalWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const sessions = useAtomValue(agentSessionsAtom)
+  const currentSessionMeta = React.useMemo(
+    () => sessions.find((s) => s.id === sessionId) ?? null,
+    [sessions, sessionId],
+  )
   // 从会话元数据派生 workspaceId：会话数据已加载时以自身为准，未加载时回退全局 atom
   const currentWorkspaceId = React.useMemo(() => {
-    const meta = sessions.find((s) => s.id === sessionId)
-    if (!meta) return globalWorkspaceId // 数据未加载，回退全局
-    return meta.workspaceId ?? null     // 数据已加载，以会话自身为准
-  }, [sessions, sessionId, globalWorkspaceId])
+    if (!currentSessionMeta) return globalWorkspaceId // 数据未加载，回退全局
+    return currentSessionMeta.workspaceId ?? null     // 数据已加载，以会话自身为准
+  }, [currentSessionMeta, globalWorkspaceId])
   const [pendingPrompt, setPendingPrompt] = useAtom(agentPendingPromptAtom)
   const [pendingFiles, setPendingFiles] = useAtom(agentPendingFilesAtomFamily(sessionId))
   const workspaces = useAtomValue(agentWorkspacesAtom)
+  const currentWorkspace = React.useMemo(
+    () => currentWorkspaceId ? (workspaces.find((w) => w.id === currentWorkspaceId) ?? null) : null,
+    [workspaces, currentWorkspaceId],
+  )
+  const currentAgentEngine: AgentEngine = currentSessionMeta?.agentEngine
+    ?? currentWorkspace?.agentEngine
+    ?? DEFAULT_AGENT_ENGINE
+  const isPiAgentEngine = currentAgentEngine === 'pi'
   // 保持 channelId 稳定：初始化前使用上次有效值，避免工具栏抖动
   const stableChannelIdRef = React.useRef(agentChannelId)
   if (agentChannelId) stableChannelIdRef.current = agentChannelId
@@ -556,7 +567,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   }, [sessionId, currentWorkspaceId, setSessionPathMap])
 
   // 获取工作区共享文件目录路径（@ 引用时需要搜索）
-  const workspaceSlug = workspaces.find((w) => w.id === currentWorkspaceId)?.slug ?? null
+  const workspaceSlug = currentWorkspace?.slug ?? null
   React.useEffect(() => {
     if (!workspaceSlug) {
       setWorkspaceFilesPath(null)
@@ -1632,6 +1643,11 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
   /** 分叉会话：从指定消息处创建新会话并自动切换 */
   const handleFork = React.useCallback(async (upToMessageUuid: string): Promise<void> => {
+    if (isPiAgentEngine) {
+      toast.info('pi experimental 暂不支持会话分叉。请在 Claude SDK 工作区中使用该功能。')
+      return
+    }
+
     try {
       const meta = await window.electronAPI.forkAgentSession({
         sessionId,
@@ -1657,17 +1673,26 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         description: friendlyDesc,
       })
     }
-  }, [sessionId, openSession, setAgentSessions])
+  }, [sessionId, openSession, setAgentSessions, isPiAgentEngine])
 
   /** 快照回退：同一会话内回退到指定消息点，恢复文件 + 截断对话 */
   const [rewindTargetUuid, setRewindTargetUuid] = React.useState<string | null>(null)
 
   const handleRewindRequest = React.useCallback((assistantMessageUuid: string): void => {
+    if (isPiAgentEngine) {
+      toast.info('pi experimental 暂不支持文件快照回退。')
+      return
+    }
     setRewindTargetUuid(assistantMessageUuid)
-  }, [])
+  }, [isPiAgentEngine])
 
   const handleRewindConfirm = React.useCallback(async (): Promise<void> => {
     if (!rewindTargetUuid) return
+    if (isPiAgentEngine) {
+      setRewindTargetUuid(null)
+      toast.info('pi experimental 暂不支持文件快照回退。')
+      return
+    }
     const targetUuid = rewindTargetUuid
     setRewindTargetUuid(null)
 
@@ -1707,7 +1732,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         description: error instanceof Error ? error.message : '未知错误',
       })
     }
-  }, [rewindTargetUuid, sessionId, store])
+  }, [rewindTargetUuid, sessionId, store, isPiAgentEngine])
 
   // 监听快捷键系统分发的 stop-generation 事件
   React.useEffect(() => {
@@ -1916,6 +1941,12 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         {/* Agent Header */}
         <AgentHeader sessionId={sessionId} />
 
+        {isPiAgentEngine && (
+          <div className="mx-4 mb-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-700 dark:text-amber-300">
+            pi experimental 当前支持本地 coding 最小闭环，分叉、回退和 Claude SDK 原生恢复暂不可用。
+          </div>
+        )}
+
         {/* 消息区域 */}
         <AgentMessages
           sessionId={sessionId}
@@ -1930,8 +1961,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           stoppedByUser={stoppedByUser}
           onRetry={handleRetry}
           onRetryInNewSession={handleRetryInNewSession}
-          onFork={handleFork}
-          onRewind={handleRewindRequest}
+          onFork={isPiAgentEngine ? undefined : handleFork}
+          onRewind={isPiAgentEngine ? undefined : handleRewindRequest}
           onCompact={handleCompact}
         />
 

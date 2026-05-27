@@ -176,6 +176,7 @@ import {
   searchAgentSessionReferences,
 } from './lib/agent-session-manager'
 import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession } from './lib/agent-service'
+import { resolveAgentEngine } from './lib/agent-engine'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
@@ -705,6 +706,15 @@ if let appUrl = NSWorkspace.shared.urlForApplication(toOpen: url) {
 function cacheNull(key: string): null {
   defaultAppCache.set(key, null)
   return null
+}
+
+function assertAgentSessionForkSupported(sessionId: string): void {
+  const session = getAgentSessionMeta(sessionId)
+  const workspace = session?.workspaceId ? getAgentWorkspace(session.workspaceId) : null
+  const engine = resolveAgentEngine({ session, workspace })
+  if (engine === 'pi') {
+    throw new Error('pi experimental 暂不支持会话分叉。请在 Claude SDK 工作区中使用该功能。')
+  }
 }
 
 /**
@@ -1756,6 +1766,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     AGENT_IPC_CHANNELS.FORK_SESSION,
     async (_, input: ForkSessionInput): Promise<AgentSessionMeta> => {
+      assertAgentSessionForkSupported(input.sessionId)
       return forkAgentSession(input)
     }
   )

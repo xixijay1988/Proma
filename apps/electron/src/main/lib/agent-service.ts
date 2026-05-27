@@ -26,6 +26,8 @@ import type {
   AgentQueueMessageInput,
   PromaPermissionMode,
   AgentExternalRunSource,
+  AgentEngine,
+  AgentProviderAdapter,
 } from '@proma/shared'
 import { scanAndKillOrphanedClaudeSubprocesses } from './adapters/claude-agent-adapter'
 import { createAgentAdapterRegistry } from './agent-adapter-registry'
@@ -33,13 +35,43 @@ import { AgentEventBus } from './agent-event-bus'
 import { AgentOrchestrator } from './agent-orchestrator'
 import { getAgentSessionWorkspacePath, getWorkspaceFilesDir } from './config-paths'
 import { getAgentSessionMeta } from './agent-session-manager'
+import { getAgentWorkspace } from './agent-workspace-manager'
+import { resolveAgentEngine } from './agent-engine'
 
 // ===== 实例创建 =====
 
 const eventBus = new AgentEventBus()
 const adapterRegistry = createAgentAdapterRegistry()
-const claudeAdapter = adapterRegistry.get('claude-sdk')
-const orchestrator = new AgentOrchestrator(claudeAdapter, eventBus)
+const orchestrators = new Map<AgentEngine, AgentOrchestrator>()
+const orchestratorAdapters = new Set<AgentProviderAdapter>()
+
+function getOrchestrator(engine: AgentEngine): AgentOrchestrator {
+  const existing = orchestrators.get(engine)
+  if (existing) return existing
+
+  const adapter = adapterRegistry.get(engine)
+  const orchestrator = new AgentOrchestrator(adapter, eventBus)
+  orchestrators.set(engine, orchestrator)
+  orchestratorAdapters.add(adapter)
+  return orchestrator
+}
+
+function resolveEngineForSession(sessionId: string): AgentEngine {
+  const session = getAgentSessionMeta(sessionId)
+  const workspace = session?.workspaceId ? getAgentWorkspace(session.workspaceId) : null
+  return resolveAgentEngine({ session, workspace })
+}
+
+function resolveEngineForRun(input: AgentSendInput): AgentEngine {
+  const session = getAgentSessionMeta(input.sessionId)
+  const workspaceId = input.workspaceId ?? session?.workspaceId
+  const workspace = workspaceId ? getAgentWorkspace(workspaceId) : null
+  return resolveAgentEngine({ session, workspace })
+}
+
+function getSessionOrchestrator(sessionId: string): AgentOrchestrator {
+  return getOrchestrator(resolveEngineForSession(sessionId))
+}
 
 /** 导出 EventBus 供飞书 Bridge 等外部服务订阅事件 */
 export { eventBus as agentEventBus }
@@ -120,6 +152,7 @@ export async function runAgent(
   input: AgentSendInput,
   webContents: WebContents,
 ): Promise<void> {
+  const orchestrator = getOrchestrator(resolveEngineForRun(input))
   // 更新 webContents 映射（允许覆盖 — 由 orchestrator.activeSessions 处理真正的并发保护）
   registerWebContents(input.sessionId, webContents)
   try {
@@ -197,6 +230,7 @@ export async function runAgentHeadless(
   // 尝试注册主窗口 webContents，让流式事件同步推送到桌面端
   const wc = getMainRendererWebContents()
   const runInput: AgentSendInput = input.startedAt != null ? input : { ...input, startedAt: Date.now() }
+  const orchestrator = getOrchestrator(resolveEngineForRun(runInput))
   const startedAt = runInput.startedAt!
   if (wc) {
     registerWebContents(runInput.sessionId, wc)
@@ -277,14 +311,14 @@ export async function runAgentHeadless(
  * 生成 Agent 会话标题
  */
 export async function generateAgentTitle(input: AgentGenerateTitleInput): Promise<string | null> {
-  return orchestrator.generateTitle(input)
+  return getOrchestrator('claude-sdk').generateTitle(input)
 }
 
 /**
  * 中止指定会话的 Agent 执行
  */
 export function stopAgent(sessionId: string): void {
-  orchestrator.stop(sessionId)
+  getSessionOrchestrator(sessionId).stop(sessionId)
 }
 
 /**
@@ -294,22 +328,36 @@ export async function rewindAgentSession(
   sessionId: string,
   assistantMessageUuid: string,
 ): Promise<import('@proma/shared').RewindSessionResult> {
-  return orchestrator.rewindSession(sessionId, assistantMessageUuid)
+  const engine = resolveEngineForSession(sessionId)
+  if (engine === 'pi') {
+    throw new Error('pi experimental 暂不支持文件快照回退。')
+  }
+  return getOrchestrator(engine).rewindSession(sessionId, assistantMessageUuid)
 }
 
 /**
  * 检查指定会话是否正在运行
  */
 export function isAgentSessionActive(sessionId: string): boolean {
-  return orchestrator.isActive(sessionId)
+  const orchestrator = getSessionOrchestrator(sessionId)
+  if (orchestrator.isActive(sessionId)) return true
+
+  // 会话元数据异常或 engine 迁移过程中，兜底扫描已构造实例，避免漏报运行中会话。
+  for (const existing of orchestrators.values()) {
+    if (existing === orchestrator) continue
+    if (existing.isActive(sessionId)) return true
+  }
+  return false
 }
 
 /** 中止所有活跃的 Agent 会话（应用退出时调用） */
 export function stopAllAgents(): void {
   try {
-    orchestrator.stopAll()
+    for (const orchestrator of orchestrators.values()) {
+      orchestrator.stopAll()
+    }
   } finally {
-    adapterRegistry.disposeExcept(new Set([claudeAdapter]))
+    adapterRegistry.disposeExcept(orchestratorAdapters)
   }
 }
 
@@ -329,7 +377,7 @@ export function killOrphanedClaudeSubprocesses(): void {
  * 同时更新 Proma 侧（canUseTool 动态读取）和 SDK 侧（query.setPermissionMode）。
  */
 export async function updateAgentPermissionMode(sessionId: string, mode: PromaPermissionMode): Promise<void> {
-  await orchestrator.updateSessionPermissionMode(sessionId, mode)
+  await getSessionOrchestrator(sessionId).updateSessionPermissionMode(sessionId, mode)
 }
 
 // ===== 流式追加消息 =====
@@ -343,7 +391,7 @@ export async function queueAgentMessage(
   input: AgentQueueMessageInput,
   _webContents: WebContents,
 ): Promise<string> {
-  return orchestrator.queueMessage(
+  return getSessionOrchestrator(input.sessionId).queueMessage(
     input.sessionId,
     input.userMessage,
     undefined,
