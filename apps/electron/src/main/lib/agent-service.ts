@@ -27,7 +27,8 @@ import type {
   PromaPermissionMode,
   AgentExternalRunSource,
 } from '@proma/shared'
-import { ClaudeAgentAdapter, scanAndKillOrphanedClaudeSubprocesses } from './adapters/claude-agent-adapter'
+import { scanAndKillOrphanedClaudeSubprocesses } from './adapters/claude-agent-adapter'
+import { createAgentAdapterRegistry } from './agent-adapter-registry'
 import { AgentEventBus } from './agent-event-bus'
 import { AgentOrchestrator } from './agent-orchestrator'
 import { getAgentSessionWorkspacePath, getWorkspaceFilesDir } from './config-paths'
@@ -36,8 +37,8 @@ import { getAgentSessionMeta } from './agent-session-manager'
 // ===== 实例创建 =====
 
 const eventBus = new AgentEventBus()
-const adapter = new ClaudeAgentAdapter()
-const orchestrator = new AgentOrchestrator(adapter, eventBus)
+const adapterRegistry = createAgentAdapterRegistry()
+const orchestrator = new AgentOrchestrator(adapterRegistry.get('claude-sdk'), eventBus)
 
 /** 导出 EventBus 供飞书 Bridge 等外部服务订阅事件 */
 export { eventBus as agentEventBus }
