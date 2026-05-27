@@ -36,7 +36,7 @@ import { AgentOrchestrator } from './agent-orchestrator'
 import { getAgentSessionWorkspacePath, getWorkspaceFilesDir } from './config-paths'
 import { getAgentSessionMeta } from './agent-session-manager'
 import { getAgentWorkspace } from './agent-workspace-manager'
-import { resolveAgentEngine } from './agent-engine'
+import { resolveAgentEngine, resolveExistingSessionAgentEngine } from './agent-engine'
 
 // ===== 实例创建 =====
 
@@ -44,6 +44,7 @@ const eventBus = new AgentEventBus()
 const adapterRegistry = createAgentAdapterRegistry()
 const orchestrators = new Map<AgentEngine, AgentOrchestrator>()
 const orchestratorAdapters = new Set<AgentProviderAdapter>()
+const activeSessionOrchestrators = new Map<string, AgentOrchestrator>()
 
 function getOrchestrator(engine: AgentEngine): AgentOrchestrator {
   const existing = orchestrators.get(engine)
@@ -58,19 +59,42 @@ function getOrchestrator(engine: AgentEngine): AgentOrchestrator {
 
 function resolveEngineForSession(sessionId: string): AgentEngine {
   const session = getAgentSessionMeta(sessionId)
-  const workspace = session?.workspaceId ? getAgentWorkspace(session.workspaceId) : null
-  return resolveAgentEngine({ session, workspace })
+  return session ? resolveExistingSessionAgentEngine({ session }) : resolveAgentEngine({})
 }
 
 function resolveEngineForRun(input: AgentSendInput): AgentEngine {
   const session = getAgentSessionMeta(input.sessionId)
   const workspaceId = input.workspaceId ?? session?.workspaceId
   const workspace = workspaceId ? getAgentWorkspace(workspaceId) : null
-  return resolveAgentEngine({ session, workspace })
+  return session
+    ? resolveExistingSessionAgentEngine({ session, workspace })
+    : resolveAgentEngine({ workspace })
 }
 
 function getSessionOrchestrator(sessionId: string): AgentOrchestrator {
   return getOrchestrator(resolveEngineForSession(sessionId))
+}
+
+function getActiveSessionOrchestrator(sessionId: string): AgentOrchestrator | null {
+  return activeSessionOrchestrators.get(sessionId) ?? null
+}
+
+function getSessionOperationOrchestrator(sessionId: string): AgentOrchestrator {
+  return getActiveSessionOrchestrator(sessionId) ?? getSessionOrchestrator(sessionId)
+}
+
+function getRunOrchestrator(input: AgentSendInput): AgentOrchestrator {
+  return getActiveSessionOrchestrator(input.sessionId) ?? getOrchestrator(resolveEngineForRun(input))
+}
+
+function trackActiveSessionOrchestrator(sessionId: string, orchestrator: AgentOrchestrator): void {
+  activeSessionOrchestrators.set(sessionId, orchestrator)
+}
+
+function releaseActiveSessionOrchestrator(sessionId: string, orchestrator: AgentOrchestrator): void {
+  if (activeSessionOrchestrators.get(sessionId) !== orchestrator) return
+  if (orchestrator.isActive(sessionId)) return
+  activeSessionOrchestrators.delete(sessionId)
 }
 
 /** 导出 EventBus 供飞书 Bridge 等外部服务订阅事件 */
@@ -152,7 +176,8 @@ export async function runAgent(
   input: AgentSendInput,
   webContents: WebContents,
 ): Promise<void> {
-  const orchestrator = getOrchestrator(resolveEngineForRun(input))
+  const orchestrator = getRunOrchestrator(input)
+  trackActiveSessionOrchestrator(input.sessionId, orchestrator)
   // 更新 webContents 映射（允许覆盖 — 由 orchestrator.activeSessions 处理真正的并发保护）
   registerWebContents(input.sessionId, webContents)
   try {
@@ -209,6 +234,7 @@ export async function runAgent(
     if (!orchestrator.isActive(input.sessionId)) {
       sessionWebContents.delete(input.sessionId)
     }
+    releaseActiveSessionOrchestrator(input.sessionId, orchestrator)
   }
 }
 
@@ -230,7 +256,8 @@ export async function runAgentHeadless(
   // 尝试注册主窗口 webContents，让流式事件同步推送到桌面端
   const wc = getMainRendererWebContents()
   const runInput: AgentSendInput = input.startedAt != null ? input : { ...input, startedAt: Date.now() }
-  const orchestrator = getOrchestrator(resolveEngineForRun(runInput))
+  const orchestrator = getRunOrchestrator(runInput)
+  trackActiveSessionOrchestrator(runInput.sessionId, orchestrator)
   const startedAt = runInput.startedAt!
   if (wc) {
     registerWebContents(runInput.sessionId, wc)
@@ -304,6 +331,7 @@ export async function runAgentHeadless(
     if (!orchestrator.isActive(runInput.sessionId)) {
       sessionWebContents.delete(runInput.sessionId)
     }
+    releaseActiveSessionOrchestrator(runInput.sessionId, orchestrator)
   }
 }
 
@@ -318,7 +346,7 @@ export async function generateAgentTitle(input: AgentGenerateTitleInput): Promis
  * 中止指定会话的 Agent 执行
  */
 export function stopAgent(sessionId: string): void {
-  getSessionOrchestrator(sessionId).stop(sessionId)
+  getSessionOperationOrchestrator(sessionId).stop(sessionId)
 }
 
 /**
@@ -339,6 +367,9 @@ export async function rewindAgentSession(
  * 检查指定会话是否正在运行
  */
 export function isAgentSessionActive(sessionId: string): boolean {
+  const activeOrchestrator = getActiveSessionOrchestrator(sessionId)
+  if (activeOrchestrator) return true
+
   const orchestrator = getSessionOrchestrator(sessionId)
   if (orchestrator.isActive(sessionId)) return true
 
@@ -377,7 +408,7 @@ export function killOrphanedClaudeSubprocesses(): void {
  * 同时更新 Proma 侧（canUseTool 动态读取）和 SDK 侧（query.setPermissionMode）。
  */
 export async function updateAgentPermissionMode(sessionId: string, mode: PromaPermissionMode): Promise<void> {
-  await getSessionOrchestrator(sessionId).updateSessionPermissionMode(sessionId, mode)
+  await getSessionOperationOrchestrator(sessionId).updateSessionPermissionMode(sessionId, mode)
 }
 
 // ===== 流式追加消息 =====
@@ -391,7 +422,7 @@ export async function queueAgentMessage(
   input: AgentQueueMessageInput,
   _webContents: WebContents,
 ): Promise<string> {
-  return getSessionOrchestrator(input.sessionId).queueMessage(
+  return getSessionOperationOrchestrator(input.sessionId).queueMessage(
     input.sessionId,
     input.userMessage,
     undefined,

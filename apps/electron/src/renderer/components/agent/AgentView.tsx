@@ -369,9 +369,9 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     () => currentWorkspaceId ? (workspaces.find((w) => w.id === currentWorkspaceId) ?? null) : null,
     [workspaces, currentWorkspaceId],
   )
-  const currentAgentEngine: AgentEngine = currentSessionMeta?.agentEngine
-    ?? currentWorkspace?.agentEngine
-    ?? DEFAULT_AGENT_ENGINE
+  const currentAgentEngine: AgentEngine = currentSessionMeta
+    ? (currentSessionMeta.agentEngine ?? DEFAULT_AGENT_ENGINE)
+    : (currentWorkspace?.agentEngine ?? DEFAULT_AGENT_ENGINE)
   const isPiAgentEngine = currentAgentEngine === 'pi'
   // 保持 channelId 稳定：初始化前使用上次有效值，避免工具栏抖动
   const stableChannelIdRef = React.useRef(agentChannelId)
