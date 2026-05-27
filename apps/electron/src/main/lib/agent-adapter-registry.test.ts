@@ -53,6 +53,20 @@ describe('Agent adapter registry', () => {
     expect(pi.disposeCount).toBe(1)
   })
 
+  test('Given excluded adapter When disposing registry except exclusions Then keeps excluded adapter alive', () => {
+    const claude = new FakeAgentAdapter('claude-sdk')
+    const pi = new FakeAgentAdapter('pi')
+    const registry = new AgentAdapterRegistry([
+      { name: 'claude-sdk', adapter: claude },
+      { name: 'pi', adapter: pi },
+    ])
+
+    registry.disposeExcept(new Set([claude]))
+
+    expect(claude.disposeCount).toBe(0)
+    expect(pi.disposeCount).toBe(1)
+  })
+
   test('Given unsupported engine When resolving adapter Then throws localized unsupported engine error', () => {
     const registry = createAgentAdapterRegistryForTest()
     const unsupportedEngine = 'unknown-engine' as unknown as AgentEngine

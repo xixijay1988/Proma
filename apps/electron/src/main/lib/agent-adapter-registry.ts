@@ -52,6 +52,13 @@ export class AgentAdapterRegistry {
       entry.adapter.dispose()
     }
   }
+
+  disposeExcept(excludedAdapters: ReadonlySet<AgentProviderAdapter>): void {
+    for (const entry of this.adapters.values()) {
+      if (excludedAdapters.has(entry.adapter)) continue
+      entry.adapter.dispose()
+    }
+  }
 }
 
 function isNamedAgentAdapter(

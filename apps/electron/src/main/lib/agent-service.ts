@@ -38,7 +38,8 @@ import { getAgentSessionMeta } from './agent-session-manager'
 
 const eventBus = new AgentEventBus()
 const adapterRegistry = createAgentAdapterRegistry()
-const orchestrator = new AgentOrchestrator(adapterRegistry.get('claude-sdk'), eventBus)
+const claudeAdapter = adapterRegistry.get('claude-sdk')
+const orchestrator = new AgentOrchestrator(claudeAdapter, eventBus)
 
 /** 导出 EventBus 供飞书 Bridge 等外部服务订阅事件 */
 export { eventBus as agentEventBus }
@@ -308,9 +309,7 @@ export function stopAllAgents(): void {
   try {
     orchestrator.stopAll()
   } finally {
-    // registry 管理所有 adapter 生命周期；各 adapter 的 dispose() 必须保持幂等，
-    // 因为 orchestrator.stopAll() 已经会释放当前持有的 Claude adapter。
-    adapterRegistry.dispose()
+    adapterRegistry.disposeExcept(new Set([claudeAdapter]))
   }
 }
 
