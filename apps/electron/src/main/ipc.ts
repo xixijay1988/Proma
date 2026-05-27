@@ -42,8 +42,11 @@ import type {
   FileDialogResult,
   RecentMessagesResult,
   AgentSessionMeta,
+  AgentEngine,
   AgentSendInput,
   AgentWorkspace,
+  AgentWorkspaceCreateInput,
+  AgentWorkspaceUpdateInput,
   AgentGenerateTitleInput,
   AgentSaveFilesInput,
   AgentSaveWorkspaceFilesInput,
@@ -1611,8 +1614,8 @@ export function registerIpcHandlers(): void {
   // 创建 Agent 会话
   ipcMain.handle(
     AGENT_IPC_CHANNELS.CREATE_SESSION,
-    async (_, title?: string, channelId?: string, workspaceId?: string): Promise<AgentSessionMeta> => {
-      const session = createAgentSession(title, channelId, workspaceId)
+    async (_, title?: string, channelId?: string, workspaceId?: string, agentEngine?: AgentEngine): Promise<AgentSessionMeta> => {
+      const session = createAgentSession(title, channelId, workspaceId, agentEngine)
       feishuBridgeManager.ensureSessionMirror(session).catch((error) => {
         console.error('[飞书 Session 镜像] 新会话建群失败:', error)
       })
@@ -1784,15 +1787,17 @@ export function registerIpcHandlers(): void {
   // 创建 Agent 工作区
   ipcMain.handle(
     AGENT_IPC_CHANNELS.CREATE_WORKSPACE,
-    async (_, name: string): Promise<AgentWorkspace> => {
-      return createAgentWorkspace(name)
+    async (_, input: string | AgentWorkspaceCreateInput): Promise<AgentWorkspace> => {
+      const name = typeof input === 'string' ? input : input.name
+      const agentEngine = typeof input === 'string' ? undefined : input.agentEngine
+      return createAgentWorkspace(name, agentEngine)
     }
   )
 
   // 更新 Agent 工作区
   ipcMain.handle(
     AGENT_IPC_CHANNELS.UPDATE_WORKSPACE,
-    async (_, id: string, updates: { name: string }): Promise<AgentWorkspace> => {
+    async (_, id: string, updates: AgentWorkspaceUpdateInput): Promise<AgentWorkspace> => {
       return updateAgentWorkspace(id, updates)
     }
   )

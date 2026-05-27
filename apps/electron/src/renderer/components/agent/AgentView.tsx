@@ -1590,8 +1590,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     if (!agentChannelId) return
 
     try {
+      const currentWorkspace = workspaces.find((w) => w.id === currentWorkspaceId)
+      const agentEngine = currentWorkspace?.agentEngine ?? 'claude-sdk'
       const meta = await window.electronAPI.createAgentSession(
-        undefined, agentChannelId, currentWorkspaceId || undefined,
+        undefined, agentChannelId, currentWorkspaceId || undefined, agentEngine,
       )
       setAgentSessions((prev) => [meta, ...prev])
 
@@ -1628,7 +1630,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     } catch (error) {
       console.error('[AgentView] 在新会话中重试失败:', error)
     }
-  }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, openSession, setAgentSessions, setStreamingStates, permissionMode])
+  }, [sessionId, agentChannelId, agentModelId, currentWorkspaceId, workspaces, openSession, setAgentSessions, setStreamingStates, permissionMode])
 
   /** 分叉会话：从指定消息处创建新会话并自动切换 */
   const handleFork = React.useCallback(async (upToMessageUuid: string): Promise<void> => {

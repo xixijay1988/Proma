@@ -32,11 +32,14 @@ import type {
   RecentMessagesResult,
   MessageSearchResult,
   AgentSessionMeta,
+  AgentEngine,
   SDKMessage,
   AgentSendInput,
   AgentStreamEvent,
   AgentStreamCompletePayload,
   AgentWorkspace,
+  AgentWorkspaceCreateInput,
+  AgentWorkspaceUpdateInput,
   AgentGenerateTitleInput,
   AgentSaveFilesInput,
   AgentSaveWorkspaceFilesInput,
@@ -406,7 +409,7 @@ export interface ElectronAPI {
   listAgentSessions: () => Promise<AgentSessionMeta[]>
 
   /** 创建 Agent 会话 */
-  createAgentSession: (title?: string, channelId?: string, workspaceId?: string) => Promise<AgentSessionMeta>
+  createAgentSession: (title?: string, channelId?: string, workspaceId?: string, agentEngine?: AgentEngine) => Promise<AgentSessionMeta>
 
   /** 获取 Agent 会话 SDKMessage（Phase 4 新格式） */
   getAgentSessionSDKMessages: (id: string) => Promise<SDKMessage[]>
@@ -472,10 +475,10 @@ export interface ElectronAPI {
   listAgentWorkspaces: () => Promise<AgentWorkspace[]>
 
   /** 创建 Agent 工作区 */
-  createAgentWorkspace: (name: string) => Promise<AgentWorkspace>
+  createAgentWorkspace: (input: string | AgentWorkspaceCreateInput) => Promise<AgentWorkspace>
 
   /** 更新 Agent 工作区 */
-  updateAgentWorkspace: (id: string, updates: { name: string }) => Promise<AgentWorkspace>
+  updateAgentWorkspace: (id: string, updates: AgentWorkspaceUpdateInput) => Promise<AgentWorkspace>
 
   /** 删除 Agent 工作区 */
   deleteAgentWorkspace: (id: string) => Promise<void>
@@ -1359,8 +1362,8 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_SESSIONS)
   },
 
-  createAgentSession: (title?: string, channelId?: string, workspaceId?: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_SESSION, title, channelId, workspaceId)
+  createAgentSession: (title?: string, channelId?: string, workspaceId?: string, agentEngine?: AgentEngine) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_SESSION, title, channelId, workspaceId, agentEngine)
   },
 
   getAgentSessionSDKMessages: (id: string) => {
@@ -1442,11 +1445,11 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_WORKSPACES)
   },
 
-  createAgentWorkspace: (name: string) => {
-    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_WORKSPACE, name)
+  createAgentWorkspace: (input: string | AgentWorkspaceCreateInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CREATE_WORKSPACE, input)
   },
 
-  updateAgentWorkspace: (id: string, updates: { name: string }) => {
+  updateAgentWorkspace: (id: string, updates: AgentWorkspaceUpdateInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_WORKSPACE, id, updates)
   },
 

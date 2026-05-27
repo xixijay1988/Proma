@@ -22,6 +22,7 @@ import {
   getSdkConfigDir,
 } from './config-paths'
 import { getAgentWorkspace } from './agent-workspace-manager'
+import { DEFAULT_AGENT_ENGINE } from '@proma/shared'
 
 // 在模块加载时一次性设置 SDK 配置目录，避免在 forkSession 等异步调用中临时修改/恢复
 // process.env 导致的并发安全问题（异步操作的 await 间隙其他代码可能读到错误值）
@@ -29,6 +30,7 @@ if (!process.env.CLAUDE_CONFIG_DIR) {
   process.env.CLAUDE_CONFIG_DIR = getSdkConfigDir()
 }
 import type {
+  AgentEngine,
   AgentSessionMeta,
   AgentMessage,
   SDKMessage,
@@ -100,6 +102,7 @@ export function createAgentSession(
   title?: string,
   channelId?: string,
   workspaceId?: string,
+  agentEngine: AgentEngine = DEFAULT_AGENT_ENGINE,
 ): AgentSessionMeta {
   const index = readIndex()
   const now = Date.now()
@@ -109,6 +112,7 @@ export function createAgentSession(
     title: title || '新 Agent 会话',
     channelId,
     workspaceId,
+    agentEngine,
     createdAt: now,
     updatedAt: now,
   }
@@ -729,6 +733,7 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
     forkTitle,
     sourceMeta.channelId,
     sourceMeta.workspaceId,
+    sourceMeta.agentEngine,
   )
 
   updateAgentSessionMeta(newMeta.id, {

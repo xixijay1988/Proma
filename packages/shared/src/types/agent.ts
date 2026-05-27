@@ -54,6 +54,18 @@ export interface AgentWorkspace {
   updatedAt: number
 }
 
+/** 创建 Agent 工作区输入 */
+export interface AgentWorkspaceCreateInput {
+  name: string
+  agentEngine?: AgentEngine
+}
+
+/** 更新 Agent 工作区输入 */
+export interface AgentWorkspaceUpdateInput {
+  name: string
+  agentEngine?: AgentEngine
+}
+
 // ===== SDK 新增类型声明（0.2.52 ~ 0.2.63） =====
 
 /**

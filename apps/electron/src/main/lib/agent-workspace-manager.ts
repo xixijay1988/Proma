@@ -19,7 +19,8 @@ import {
   getDefaultSkillsDir,
   parseSkillVersion,
 } from './config-paths'
-import type { AgentWorkspace, WorkspaceMcpConfig, SkillMeta, SkillImportSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent } from '@proma/shared'
+import { DEFAULT_AGENT_ENGINE } from '@proma/shared'
+import type { AgentWorkspace, AgentEngine, WorkspaceMcpConfig, SkillMeta, SkillImportSource, OtherWorkspaceSkillsGroup, WorkspaceCapabilities, SkillFileNode, SkillFileContent } from '@proma/shared'
 
 interface AgentWorkspacesIndex {
   version: number
@@ -27,6 +28,17 @@ interface AgentWorkspacesIndex {
 }
 
 const INDEX_VERSION = 2
+
+function normalizeAgentWorkspace(workspace: AgentWorkspace): AgentWorkspace {
+  return {
+    ...workspace,
+    agentEngine: workspace.agentEngine ?? DEFAULT_AGENT_ENGINE,
+  }
+}
+
+export function normalizeAgentWorkspaceForTest(workspace: AgentWorkspace): AgentWorkspace {
+  return normalizeAgentWorkspace(workspace)
+}
 
 /** 读取工作区索引文件，自动执行版本迁移 */
 function readIndex(): AgentWorkspacesIndex {
@@ -116,13 +128,13 @@ function slugify(name: string, existingSlugs: Set<string>): string {
 
 export function listAgentWorkspaces(): AgentWorkspace[] {
   const index = readIndex()
-  return index.workspaces.slice()
+  return index.workspaces.map(normalizeAgentWorkspace)
 }
 
 /** 按 updatedAt 降序（桥接/飞书列表等与旧版内联 sort 一致；渲染进程仍用 listAgentWorkspaces） */
 export function listAgentWorkspacesByUpdatedAt(): AgentWorkspace[] {
   const index = readIndex()
-  return index.workspaces.slice().sort((a, b) => b.updatedAt - a.updatedAt)
+  return index.workspaces.map(normalizeAgentWorkspace).sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
 /** 按指定 ID 顺序重排工作区，未列出的追加到末尾 */
@@ -145,7 +157,8 @@ export function reorderAgentWorkspaces(orderedIds: string[]): AgentWorkspace[] {
 
 export function getAgentWorkspace(id: string): AgentWorkspace | undefined {
   const index = readIndex()
-  return index.workspaces.find((w) => w.id === id)
+  const workspace = index.workspaces.find((w) => w.id === id)
+  return workspace ? normalizeAgentWorkspace(workspace) : undefined
 }
 
 /** 将 ~/.proma/default-skills/ 的内容逐个复制到工作区 skills/ 目录 */
@@ -172,7 +185,7 @@ function copyDefaultSkills(workspaceSlug: string): void {
   }
 }
 
-export function createAgentWorkspace(name: string): AgentWorkspace {
+export function createAgentWorkspace(name: string, agentEngine: AgentEngine = DEFAULT_AGENT_ENGINE): AgentWorkspace {
   const index = readIndex()
 
   const duplicate = index.workspaces.find((w) => w.name === name)
@@ -188,6 +201,7 @@ export function createAgentWorkspace(name: string): AgentWorkspace {
     id: randomUUID(),
     name,
     slug,
+    agentEngine,
     createdAt: now,
     updatedAt: now,
   }
@@ -206,7 +220,7 @@ export function createAgentWorkspace(name: string): AgentWorkspace {
 /** 更新工作区名称（slug 和目录不变） */
 export function updateAgentWorkspace(
   id: string,
-  updates: { name: string },
+  updates: { name: string; agentEngine?: AgentEngine },
 ): AgentWorkspace {
   const index = readIndex()
   const idx = index.workspaces.findIndex((w) => w.id === id)
@@ -225,6 +239,7 @@ export function updateAgentWorkspace(
   const updated: AgentWorkspace = {
     ...existing,
     name: updates.name,
+    agentEngine: updates.agentEngine ?? existing.agentEngine ?? DEFAULT_AGENT_ENGINE,
     updatedAt: Date.now(),
   }
 
@@ -261,6 +276,7 @@ export function ensureDefaultWorkspace(): AgentWorkspace {
       id: randomUUID(),
       name: '默认工作区',
       slug: 'default',
+      agentEngine: DEFAULT_AGENT_ENGINE,
       createdAt: now,
       updatedAt: now,
     }
@@ -278,7 +294,7 @@ export function ensureDefaultWorkspace(): AgentWorkspace {
     ensurePluginManifest(defaultWs.slug, defaultWs.name)
   }
 
-  return defaultWs
+  return normalizeAgentWorkspace(defaultWs)
 }
 
 // ===== 默认 Skills 自动升级 =====
