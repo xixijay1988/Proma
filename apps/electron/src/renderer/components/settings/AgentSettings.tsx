@@ -32,7 +32,7 @@ import {
 import { settingsTabAtom, settingsOpenAtom } from '@/atoms/settings-tab'
 import { appModeAtom } from '@/atoms/app-mode'
 import { chatToolsAtom } from '@/atoms/chat-tool-atoms'
-import type { McpServerEntry, SkillMeta, OtherWorkspaceSkillsGroup, WorkspaceMcpConfig } from '@proma/shared'
+import type { AgentEngine, McpServerEntry, SkillMeta, OtherWorkspaceSkillsGroup, WorkspaceMcpConfig } from '@proma/shared'
 import { SettingsSection, SettingsCard, SettingsRow } from './primitives'
 import { McpServerForm } from './McpServerForm'
 import { SkillFilesPanel } from './SkillFilesPanel'
@@ -124,6 +124,7 @@ export function AgentSettings(): React.ReactElement {
   const workspaces = useAtomValue(agentWorkspacesAtom)
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
   const agentChannelId = useAtomValue(agentChannelIdAtom)
+  const setWorkspaces = useSetAtom(agentWorkspacesAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
   const setCurrentSessionId = useSetAtom(currentAgentSessionIdAtom)
   const setPendingPrompt = useSetAtom(agentPendingPromptAtom)
@@ -188,6 +189,28 @@ export function AgentSettings(): React.ReactElement {
   }, [showImportDialog, loadOtherWorkspaces])
 
   React.useEffect(() => { loadData() }, [loadData])
+
+  const handleWorkspaceEngineChange = React.useCallback(
+    async (value: string): Promise<void> => {
+      if (!currentWorkspace) return
+      const nextEngine = value as AgentEngine
+
+      if (nextEngine === (currentWorkspace.agentEngine ?? 'claude-sdk')) return
+
+      try {
+        const updated = await window.electronAPI.updateAgentWorkspace(currentWorkspace.id, {
+          name: currentWorkspace.name,
+          agentEngine: nextEngine,
+        })
+        setWorkspaces((prev) => prev.map((workspace) => (workspace.id === updated.id ? updated : workspace)))
+      } catch (error) {
+        console.error('[Agent 设置] 更新工作区引擎失败:', error)
+        const message = error instanceof Error ? error.message : '未知错误'
+        toast.error('更新工作区引擎失败', { description: message })
+      }
+    },
+    [currentWorkspace, setWorkspaces],
+  )
 
   if (!currentWorkspace) {
     return (
@@ -411,6 +434,25 @@ ${skillList}
 
   return (
     <div className="space-y-4">
+      <SettingsSection title="工作区" description={`当前工作区: ${currentWorkspace.name}`}>
+        <SettingsCard divided={false}>
+          <SettingsRow label="引擎" description="当前工作区使用的 Agent 引擎">
+            <Select
+              value={currentWorkspace?.agentEngine ?? 'claude-sdk'}
+              onValueChange={handleWorkspaceEngineChange}
+            >
+              <SelectTrigger className="w-40">
+                <SelectValue placeholder="选择引擎" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="claude-sdk">Claude SDK</SelectItem>
+                <SelectItem value="pi">pi experimental</SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingsRow>
+        </SettingsCard>
+      </SettingsSection>
+
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <div className="relative flex rounded-xl bg-muted p-1">
           <div

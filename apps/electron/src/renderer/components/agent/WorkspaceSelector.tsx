@@ -10,6 +10,7 @@ import { useAtom } from 'jotai'
 import { FolderOpen, Plus, Pencil, Trash2, GripVertical } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+import { getAgentEngineBadge } from '@/lib/agent-engine-ui'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -283,8 +284,11 @@ export function WorkspaceSelector(): React.ReactElement {
           className="overflow-y-auto scrollbar-thin flex flex-col p-1"
           style={{ maxHeight: listHeight }}
         >
-          {workspaces.map((ws) => (
-            <div key={ws.id} className="relative">
+          {workspaces.map((ws) => {
+            const badge = getAgentEngineBadge(ws.agentEngine ?? 'claude-sdk')
+
+            return (
+              <div key={ws.id} className="relative">
               {/* 上方插入指示线 */}
               {dropIndicator?.id === ws.id && dropIndicator.position === 'before' && (
                 <div className="absolute top-0 left-1 right-1 h-0.5 bg-primary rounded-full z-10" />
@@ -325,6 +329,11 @@ export function WorkspaceSelector(): React.ReactElement {
               ) : (
                 <>
                   <span className="flex-1 min-w-0 truncate">{ws.name}</span>
+                  {badge.tone === 'warning' && (
+                    <span className="ml-2 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-300">
+                      {badge.label}
+                    </span>
+                  )}
 
                   <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
                     <button
@@ -352,8 +361,9 @@ export function WorkspaceSelector(): React.ReactElement {
               {dropIndicator?.id === ws.id && dropIndicator.position === 'after' && (
                 <div className="absolute bottom-0 left-1 right-1 h-0.5 bg-primary rounded-full z-10" />
               )}
-            </div>
-          ))}
+              </div>
+            )
+          })}
 
           {/* 新建工作区输入框 */}
           {creating && (
