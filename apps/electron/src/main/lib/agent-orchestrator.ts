@@ -20,7 +20,7 @@ import { join, dirname } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { app } from 'electron'
-import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta, ProviderType } from '@proma/shared'
+import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta, ProviderType, AgentEngine } from '@proma/shared'
 import {
   PROMA_DEFAULT_PERMISSION_MODE,
   PROMA_PERMISSION_MODE_CONFIG,
@@ -483,6 +483,7 @@ function collectAttachedDirectories(params: {
 export class AgentOrchestrator {
   private adapter: AgentProviderAdapter
   private eventBus: AgentEventBus
+  private engine: AgentEngine
   private activeSessions = new Map<string, number>()
 
   /** 队列消息本地记录（sessionId → UUID 集合，用于防重） */
@@ -494,9 +495,97 @@ export class AgentOrchestrator {
   /** 运行中会话的当前权限模式（支持运行时动态切换） */
   private sessionPermissionModes = new Map<string, PromaPermissionMode>()
 
-  constructor(adapter: AgentProviderAdapter, eventBus: AgentEventBus) {
+  constructor(adapter: AgentProviderAdapter, eventBus: AgentEventBus, engine: AgentEngine = 'claude-sdk') {
     this.adapter = adapter
     this.eventBus = eventBus
+    this.engine = engine
+  }
+
+  private async runPiProbe(
+    input: AgentSendInput,
+    callbacks: SessionCallbacks,
+    streamStartedAt: number,
+    releaseActiveRun: () => void,
+  ): Promise<void> {
+    const { sessionId, userMessage, modelId, workspaceId } = input
+    const runStartedAt = Date.now()
+    let agentCwd = homedir()
+
+    if (workspaceId) {
+      const workspace = getAgentWorkspace(workspaceId)
+      if (workspace) {
+        agentCwd = getAgentSessionWorkspacePath(workspace.slug, sessionId)
+      }
+    }
+
+    const accumulatedMessages: SDKMessage[] = []
+    let capturedResultSubtype: string | undefined
+
+    try {
+      const userSDKMsg: SDKMessage = {
+        type: 'user',
+        message: {
+          content: [{ type: 'text', text: userMessage }],
+        },
+        parent_tool_use_id: null,
+        _createdAt: Date.now(),
+      } as unknown as SDKMessage
+      appendSDKMessages(sessionId, [userSDKMsg])
+      callbacks.onRunStarted?.({ startedAt: streamStartedAt })
+
+      for await (const msg of this.adapter.query({
+        sessionId,
+        prompt: userMessage,
+        model: modelId || DEFAULT_MODEL_ID,
+        cwd: agentCwd,
+      })) {
+        if (!this.activeSessions.has(sessionId)) {
+          const wasStoppedByUser = this.stoppedBySessions.delete(sessionId)
+          this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - runStartedAt)
+          try { updateAgentSessionMeta(sessionId, { stoppedByUser: wasStoppedByUser }) } catch { /* 会话可能已删除 */ }
+          releaseActiveRun()
+          callbacks.onComplete(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt })
+          return
+        }
+
+        if (msg.type === 'assistant' || msg.type === 'result') {
+          accumulatedMessages.push(msg)
+        }
+        if (msg.type === 'result' && typeof msg.subtype === 'string') {
+          capturedResultSubtype = msg.subtype
+        }
+        this.eventBus.emit(sessionId, { kind: 'sdk_message', message: msg })
+      }
+
+      this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - runStartedAt)
+      try { updateAgentSessionMeta(sessionId, {}) } catch { /* 忽略 */ }
+      releaseActiveRun()
+      callbacks.onComplete(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt, resultSubtype: capturedResultSubtype })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '未知错误'
+      const errorSDKMsg: SDKMessage = {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'text', text: message }],
+        },
+        parent_tool_use_id: null,
+        error: { message, errorType: 'pi_process_error' },
+        _createdAt: Date.now(),
+        _errorCode: 'pi_process_error',
+        _errorTitle: 'Pi 执行错误',
+      } as unknown as SDKMessage
+      try { appendSDKMessages(sessionId, [errorSDKMsg]) } catch (persistError) {
+        console.error('[Agent 编排] 持久化 Pi 错误消息失败:', persistError)
+      }
+      this.eventBus.emit(sessionId, { kind: 'sdk_message', message: errorSDKMsg })
+      releaseActiveRun()
+      callbacks.onError(message)
+      callbacks.onComplete(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt, resultSubtype: 'error' })
+    } finally {
+      this.adapter.abort(sessionId)
+      permissionService.clearSessionPending(sessionId)
+      exitPlanService.clearSessionPending(sessionId)
+    }
   }
 
   /**
@@ -907,6 +996,43 @@ export class AgentOrchestrator {
     // 0.5 清除上一轮中断标记
     try { updateAgentSessionMeta(sessionId, { stoppedByUser: false }) } catch { /* 会话可能已删除 */ }
 
+    // 0.6 立即抢占会话槽位（在所有同步检查通过后、第一个 await 之前）
+    // 防止 preflight / env 构建期间并发调用绕过上方检查，导致多条重复消息写入 JSONL。
+    const runGeneration = Date.now()
+    // 优先使用渲染进程传来的 startedAt（确保 STREAM_COMPLETE 竞态保护比较的是同一个值），
+    // 否则用本地 runGeneration 作为回退（headless 模式等无渲染进程场景）
+    const streamStartedAt = input.startedAt ?? runGeneration
+    this.activeSessions.set(sessionId, runGeneration)
+    const releaseActiveRun = (): void => {
+      // 在发送 STREAM_COMPLETE 前释放 active slot，避免渲染进程已进入空闲态、
+      // 主进程仍在 finally 前短暂拒绝下一条消息。
+      if (this.activeSessions.get(sessionId) !== runGeneration) return
+      this.activeSessions.delete(sessionId)
+      this.sessionPermissionModes.delete(sessionId)
+      this.queuedMessageUuids.delete(sessionId)
+    }
+    const completeRun = (
+      messages?: AgentMessage[],
+      opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string },
+    ): void => {
+      releaseActiveRun()
+      callbacks.onComplete(messages, opts)
+    }
+    const failRun = (
+      error: string,
+      messages?: AgentMessage[],
+      opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string },
+    ): void => {
+      releaseActiveRun()
+      callbacks.onError(error)
+      callbacks.onComplete(messages, opts)
+    }
+
+    if (this.engine === 'pi') {
+      await this.runPiProbe(input, callbacks, streamStartedAt, releaseActiveRun)
+      return
+    }
+
     // 环境 / 配置类错误的统一上报：持久化为 TypedError 消息，由 SDKMessageRenderer 渲染
     const reportPreflightError = (typedError: TypedError) => {
       const errorContent = typedError.title
@@ -929,8 +1055,7 @@ export class AgentOrchestrator {
       try { appendSDKMessages(sessionId, [errorSDKMsg]) } catch (e) {
         console.error('[Agent 编排] 持久化 preflight error 失败:', e)
       }
-      callbacks.onError(errorContent)
-      callbacks.onComplete([], { startedAt: input.startedAt })
+      failRun(errorContent, [], { startedAt: streamStartedAt })
     }
 
     // 1. Windows 平台：检查 Shell 环境可用性
@@ -987,39 +1112,6 @@ export class AgentOrchestrator {
         canRetry: false,
       })
       return
-    }
-
-    // 2.1 立即抢占会话槽位（在所有同步检查通过后、第一个 await 之前）
-    // 防止 buildSdkEnv 等 await 期间并发调用绕过上方的检查，导致多条重复消息写入 JSONL
-    // finally 块会通过 generation 匹配来安全清理，不影响正常流程
-    const runGeneration = Date.now()
-    // 优先使用渲染进程传来的 startedAt（确保 STREAM_COMPLETE 竞态保护比较的是同一个值），
-    // 否则用本地 runGeneration 作为回退（headless 模式等无渲染进程场景）
-    const streamStartedAt = input.startedAt ?? runGeneration
-    this.activeSessions.set(sessionId, runGeneration)
-    const releaseActiveRun = (): void => {
-      // 在发送 STREAM_COMPLETE 前释放 active slot，避免渲染进程已进入空闲态、
-      // 主进程仍在 finally 前短暂拒绝下一条消息。
-      if (this.activeSessions.get(sessionId) !== runGeneration) return
-      this.activeSessions.delete(sessionId)
-      this.sessionPermissionModes.delete(sessionId)
-      this.queuedMessageUuids.delete(sessionId)
-    }
-    const completeRun = (
-      messages?: AgentMessage[],
-      opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string },
-    ): void => {
-      releaseActiveRun()
-      callbacks.onComplete(messages, opts)
-    }
-    const failRun = (
-      error: string,
-      messages?: AgentMessage[],
-      opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string },
-    ): void => {
-      releaseActiveRun()
-      callbacks.onError(error)
-      callbacks.onComplete(messages, opts)
     }
 
     // 3. 构建环境变量

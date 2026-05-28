@@ -86,10 +86,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     }
 
     try {
-      yield createErrorAssistantMessage(input, PI_PROCESS_BRIDGE_MESSAGE, 'pi_protocol_not_implemented')
-
       const processResult = await piProcess.done
       const diagnosticMessage = `${PI_PROCESS_BRIDGE_MESSAGE}\n\n${formatPiProcessDiagnostics(processResult)}`
+      yield createErrorAssistantMessage(input, diagnosticMessage, 'pi_protocol_not_implemented')
       yield createErrorResultMessage(input, diagnosticMessage)
     } finally {
       this.processes.delete(input.sessionId)

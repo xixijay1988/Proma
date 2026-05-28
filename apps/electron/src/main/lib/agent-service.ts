@@ -51,7 +51,7 @@ function getOrchestrator(engine: AgentEngine): AgentOrchestrator {
   if (existing) return existing
 
   const adapter = adapterRegistry.get(engine)
-  const orchestrator = new AgentOrchestrator(adapter, eventBus)
+  const orchestrator = new AgentOrchestrator(adapter, eventBus, engine)
   orchestrators.set(engine, orchestrator)
   orchestratorAdapters.add(adapter)
   return orchestrator
