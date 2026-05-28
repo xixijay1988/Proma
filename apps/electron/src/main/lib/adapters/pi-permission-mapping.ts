@@ -12,11 +12,14 @@ export type PiPermissionDecision =
   | { behavior: 'allow'; requireScopeCheck?: true }
   | { behavior: 'ask'; dangerLevel: PiPermissionDangerLevel }
 
-const READ_ONLY_TOOLS = new Set([
+const WORKSPACE_SCOPED_READ_TOOLS = new Set([
   'glob',
   'grep',
   'ls',
   'read',
+])
+
+const REMOTE_READ_TOOLS = new Set([
   'webfetch',
   'websearch',
 ])
@@ -37,12 +40,16 @@ export function mapPiToolPermission(input: PiPermissionInput): PiPermissionDecis
   const mode = input.mode
   const toolName = normalizeToolName(input.toolName)
 
-  if (READ_ONLY_TOOLS.has(toolName)) {
-    return { behavior: 'allow' }
+  if (mode === 'allow-all') {
+    if (REMOTE_READ_TOOLS.has(toolName)) {
+      return { behavior: 'allow' }
+    }
+
+    return { behavior: 'allow', requireScopeCheck: true }
   }
 
-  if (mode === 'allow-all') {
-    return { behavior: 'allow', requireScopeCheck: true }
+  if (WORKSPACE_SCOPED_READ_TOOLS.has(toolName) || REMOTE_READ_TOOLS.has(toolName)) {
+    return { behavior: 'allow' }
   }
 
   if (SHELL_TOOLS.has(toolName)) {
@@ -64,6 +71,10 @@ export function mapPromaPermissionModeToPiMode(mode: PromaPermissionMode): PiPer
       return 'ask'
     case 'plan':
       return 'safe'
+    default: {
+      const exhaustiveMode: never = mode
+      throw new Error(`未映射的 Proma 权限模式：${exhaustiveMode}`)
+    }
   }
 }
 

@@ -46,6 +46,13 @@ describe('pi permission mapping', () => {
     })
   })
 
+  test('Given allow-all mode When filesystem read tool requested Then allow but require scope check', () => {
+    expect(mapPiToolPermission({ mode: 'allow-all', toolName: 'read' })).toEqual({
+      behavior: 'allow',
+      requireScopeCheck: true,
+    })
+  })
+
   test('Given Proma permission mode When mapped Then returns explicit Pi mode', () => {
     expect(mapPromaPermissionModeToPiMode('bypassPermissions')).toBe('allow-all')
     expect(mapPromaPermissionModeToPiMode('auto')).toBe('ask')
