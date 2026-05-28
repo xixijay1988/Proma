@@ -7,4 +7,10 @@ describe('pi process integration', () => {
 
     expect(entrypoint.endsWith('dist/cli.js')).toBe(true)
   })
+
+  test('Given installed pi package When resolving entrypoint Then references the scoped package root', () => {
+    const entrypoint = resolvePiCliEntrypointForTest()
+
+    expect(entrypoint).toContain('@earendil-works/pi-coding-agent')
+  })
 })

@@ -98,7 +98,11 @@ export class PiAgentAdapter implements AgentProviderAdapter {
   }
 
   abort(sessionId: string): void {
-    this.processes.get(sessionId)?.kill()
+    const piProcess = this.processes.get(sessionId)
+    if (!piProcess) return
+
+    this.processes.delete(sessionId)
+    piProcess.kill()
   }
 
   dispose(): void {

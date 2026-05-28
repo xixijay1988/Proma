@@ -32,30 +32,6 @@ function resolvePackageRootFromPackageJson(cjsRequire: NodeJS.Require): string |
   }
 }
 
-function findPackageRootFromResolvedPath(resolvedPath: string): string | null {
-  let currentDir = dirname(resolvedPath)
-
-  for (let depth = 0; depth < 8; depth += 1) {
-    if (existsSync(join(currentDir, 'package.json'))) {
-      return currentDir
-    }
-
-    const parentDir = dirname(currentDir)
-    if (parentDir === currentDir) return null
-    currentDir = parentDir
-  }
-
-  return null
-}
-
-function resolvePackageRootFromMain(cjsRequire: NodeJS.Require): string | null {
-  try {
-    return findPackageRootFromResolvedPath(cjsRequire.resolve(PI_PACKAGE_NAME))
-  } catch {
-    return null
-  }
-}
-
 function resolvePackageRootFromNodeModules(cjsRequire: NodeJS.Require): string | null {
   const searchPaths = cjsRequire.resolve.paths(PI_PACKAGE_NAME) ?? []
 
@@ -77,7 +53,6 @@ export function resolvePiCliEntrypoint(): string {
   const cjsRequire = createRequire(__filename)
   const packageRoot =
     resolvePackageRootFromPackageJson(cjsRequire) ??
-    resolvePackageRootFromMain(cjsRequire) ??
     resolvePackageRootFromNodeModules(cjsRequire)
 
   if (!packageRoot) {
