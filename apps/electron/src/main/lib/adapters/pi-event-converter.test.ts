@@ -6,6 +6,9 @@ describe('pi event converter', () => {
     const msg = convertPiTextDelta({ sessionId: 's1', delta: 'hello', model: 'model-a' })
 
     expect(msg.type).toBe('assistant')
+    expect(msg.session_id).toBe('s1')
+    expect(msg.parent_tool_use_id).toBeNull()
+    expect(msg.message.model).toBe('model-a')
     expect(msg.message.content[0]).toEqual({ type: 'text', text: 'hello' })
   })
 
@@ -15,9 +18,14 @@ describe('pi event converter', () => {
       toolUseId: 't1',
       toolName: 'bash',
       input: { command: 'pwd' },
+      model: 'model-b',
+      parentToolUseId: 'parent-1',
     })
 
     expect(msg.type).toBe('assistant')
+    expect(msg.session_id).toBe('s1')
+    expect(msg.parent_tool_use_id).toBe('parent-1')
+    expect(msg.message.model).toBe('model-b')
     expect(msg.message.content[0]).toEqual({
       type: 'tool_use',
       id: 't1',
