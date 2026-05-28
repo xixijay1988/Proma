@@ -23,11 +23,11 @@ Bun workspace monorepo：
 ```
 proma-v2/
 ├── packages/
-│   ├── shared/     # 共享类型、IPC 通道常量、配置、工具函数 (v0.1.15)
-│   ├── core/       # AI Provider 适配器、代码高亮服务 (v0.2.2)
-│   └── ui/         # 共享 UI 组件 (CodeBlock, MermaidBlock) (v0.1.3)
+│   ├── shared/     # 共享类型、IPC 通道常量、配置、工具函数 (v0.1.23)
+│   ├── core/       # AI Provider 适配器、代码高亮服务 (v0.2.9)
+│   └── ui/         # 共享 UI 组件 (CodeBlock, MermaidBlock) (v0.1.4)
 └── apps/
-    └── electron/   # Electron 桌面应用 (v0.9.5)
+    └── electron/   # Electron 桌面应用 (v0.10.21)
         └── src/
             ├── main/       # 主进程 + 服务层 (main/lib/)
             ├── preload/    # IPC 上下文桥接
@@ -40,26 +40,27 @@ proma-v2/
 
 ### 包职责详解
 
-#### @proma/shared (v0.1.15)
+#### @proma/shared (v0.1.23)
 - **导出模块**：`./types`、`./config`、`./utils`、`./constants/permission-rules`
 - **关键类型**：`AgentMessage`、`ChatMessage`、`Channel`、`PermissionRequest`、`FeishuConfig`
 - **依赖**：无运行时依赖（仅 TypeScript）
 
-#### @proma/core (v0.2.2)
+#### @proma/core (v0.2.9)
 - **导出模块**：`./providers`、`./highlight`、`./types`、`./utils`
 - **关键功能**：Provider 适配器注册表、代码高亮（Shiki）
 - **依赖**：`@proma/shared`、`shiki`
-- **Peer 依赖**：`@anthropic-ai/Codex-agent-sdk`、`@anthropic-ai/sdk`、`@modelcontextprotocol/sdk`
+- **Peer 依赖**：`@anthropic-ai/claude-agent-sdk`、`@anthropic-ai/sdk`、`@modelcontextprotocol/sdk`
 
-#### @proma/ui (v0.1.3)
+#### @proma/ui (v0.1.4)
 - **关键组件**：共享 React UI 组件库
 - **依赖**：`@proma/core`、`beautiful-mermaid`、`shiki`、Radix UI
 - **Peer 依赖**：`react@^18.3.0`、`react-dom@^18.3.0`
 
-#### @proma/electron (v0.9.5)
+#### @proma/electron (v0.10.21)
 - **职责**：Electron 桌面应用主体，集成所有包
 - **关键依赖**：
-  - `@anthropic-ai/Codex-agent-sdk@0.2.120` - Agent SDK
+  - `@anthropic-ai/claude-agent-sdk@0.3.143` - 默认 Agent 引擎
+  - `@earendil-works/pi-coding-agent@0.76.0` - pi experimental 进程桥接探针
   - `@larksuiteoapi/node-sdk` - 飞书集成
   - Radix UI、TipTap、Tailwind CSS
   - 文件解析：`pdf-parse`、`officeparser`、`word-extractor`
@@ -135,7 +136,8 @@ bun run generate:icons    # 生成应用图标
 | **构建工具** | Vite | 6.0.3 |
 | **打包工具** | esbuild | 0.24.0+ |
 | **分发工具** | Electron Builder | 25.1.8 |
-| **Agent SDK** | @anthropic-ai/Codex-agent-sdk | 0.2.120 |
+| **默认 Agent 引擎** | @anthropic-ai/claude-agent-sdk | 0.3.143 |
+| **实验 Agent 引擎** | @earendil-works/pi-coding-agent | 0.76.0 |
 | **飞书 SDK** | @larksuiteoapi/node-sdk | 最新 |
 
 ## 核心架构
@@ -171,7 +173,12 @@ bun run generate:icons    # 生成应用图标
 
 | 服务 | 职责 |
 |------|------|
-| `agent-orchestrator.ts` | Agent 核心编排层（71KB）：并发守卫、渠道查找、环境变量构建、SDK 路径解析、消息持久化、事件流处理、错误处理、自动标题生成 |
+| `agent-orchestrator.ts` | Agent 核心编排层（71KB）：并发守卫、渠道查找、环境变量构建、运行时适配器调用、消息持久化、事件流处理、错误处理、自动标题生成 |
+| `agent-engine.ts` | Agent 引擎解析：新会话跟随工作区引擎，既有会话无 `agentEngine` 时固定视为 `claude-sdk` |
+| `agent-adapter-registry.ts` | Agent 适配器注册表：按 `claude-sdk` / `pi` 管理运行时适配器生命周期 |
+| `adapters/pi-agent-adapter.ts` | pi experimental 适配器：默认 guard，启用后仅做 Pi CLI 探针和诊断输出 |
+| `adapters/pi-event-converter.ts` | pi 事件转换脚手架：定义未来 pi 文本/工具事件到 Proma 兼容 SDKMessage 的转换边界，当前真实运行尚未解析 pi 协议事件 |
+| `adapters/pi-permission-mapping.ts` | pi 权限映射脚手架：定义 Proma safe / ask / allow-all 到 pi 工具预检决策的映射，当前 CLI 探针阶段尚未接入真实 pi 工具请求 |
 | `agent-session-manager.ts` | Agent 会话管理：SDK 消息持久化、会话元数据 CRUD、JSONL 存储 |
 | `agent-prompt-builder.ts` | Agent 系统提示词构建（18KB）：动态上下文构建、内置 Agent 构建、工作区上下文注入 |
 | `agent-permission-service.ts` | Agent 权限管理：工具权限检查、权限模式管理 |
@@ -254,8 +261,8 @@ bun run generate:icons    # 生成应用图标
 
 - **`app-shell/`**：三面板布局（LeftSidebar | NavigatorPanel | MainContentPanel），侧边栏含模式切换、置顶对话、日期分组列表、流式指示器
 - **`chat/`**：聊天核心 — ChatView（消息加载/流式订阅）、ChatHeader（模型选择/上下文设置）、ChatInput（Tiptap 富文本编辑器）、ChatMessages（消息列表/自动滚动）、ParallelChatMessages（并排模式）
-- **`agent/`**：Agent 模式 — AgentView（纯展示 + 交互，IPC 监听已提升到全局）、AgentHeader（渠道/模型选择）、AgentMessages（消息列表 + 工具活动）、ToolActivityItem（工具调用展示）、WorkspaceSelector（工作区切换）、PermissionBanner/AskUserBanner（权限/问答请求 UI）
-- **`settings/`**：设置面板 — GeneralSettings（用户档案）、AppearanceSettings（主题）、ChannelSettings（渠道管理）、ChannelForm（Provider 配置）、AgentSettings（Agent 渠道/工作区/MCP）、McpServerForm（MCP 服务器配置）、AboutSettings（版本/更新）、FeishuSettings（飞书集成）；含 `primitives/` 可复用表单组件
+- **`agent/`**：Agent 模式 — AgentView（纯展示 + 交互，IPC 监听已提升到全局）、AgentHeader（渠道/模型选择）、AgentMessages（消息列表 + 工具活动）、ToolActivityItem（工具调用展示）、WorkspaceSelector（工作区切换 + 引擎 badge）、PermissionBanner/AskUserBanner（权限/问答请求 UI）
+- **`settings/`**：设置面板 — GeneralSettings（用户档案）、AppearanceSettings（主题）、ChannelSettings（渠道管理）、ChannelForm（Provider 配置）、AgentSettings（Agent 渠道/工作区/引擎/MCP）、McpServerForm（MCP 服务器配置）、AboutSettings（版本/更新）、FeishuSettings（飞书集成）；含 `primitives/` 可复用表单组件
 - **`file-browser/`**：文件浏览器 — FileBrowser（工作区文件树浏览）
 - **`ai-elements/`**：AI 展示组件 — Markdown 渲染、代码块、Mermaid 图、推理折叠、上下文分割线、富文本输入
 - **`ui/`**：Radix UI 组件（现代化设计，CSS 变量主题）
@@ -309,7 +316,7 @@ bun run generate:icons    # 生成应用图标
 
 ## 构建工具
 
-- **主进程/Preload**：esbuild (`--bundle --platform=node --format=cjs --external:electron --external:@anthropic-ai/Codex-agent-sdk`)
+- **主进程/Preload**：esbuild (`--bundle --platform=node --format=cjs --external:electron --external:@anthropic-ai/claude-agent-sdk`)
 - **渲染进程**：Vite + React 插件 + Tailwind CSS + HMR
 - **开发热重载**：渲染进程 Vite HMR 即时生效；主进程/Preload 通过 electronmon 监听 dist 文件变化自动重启
 - **打包分发**：electron-builder（配置见 `electron-builder.yml`）
@@ -317,22 +324,23 @@ bun run generate:icons    # 生成应用图标
 ### 重要：打包配置注意事项
 
 **Agent SDK 打包要求（必须遵守）：**
-- `@anthropic-ai/Codex-agent-sdk` 必须使用 `--external` 参数排除在 esbuild 打包之外
-- **0.2.113+ 架构变化**：SDK 主包已不再携带 JS CLI 入口（`cli.js`）和 `vendor/ripgrep/`，改为按平台分发 native binary（`Codex` / `Codex.exe`，单文件 214-252 MB），通过 `optionalDependencies` 安装到 `@anthropic-ai/Codex-agent-sdk-{platform}-{arch}/` 子包
+- `@anthropic-ai/claude-agent-sdk` 必须使用 `--external` 参数排除在 esbuild 打包之外
+- **0.2.113+ 架构变化**：SDK 主包已不再携带 JS CLI 入口（`cli.js`）和 `vendor/ripgrep/`，改为按平台分发 native binary（`claude` / `claude.exe`，单文件 214-252 MB），通过 `optionalDependencies` 安装到 `@anthropic-ai/claude-agent-sdk-{platform}-{arch}/` 子包
 - `apps/electron/package.json` 必须显式声明当前 CI 矩阵覆盖的平台子包为 `optionalDependencies`（darwin-arm64 / darwin-x64 / win32-x64），否则 bun workspace 不会把它们链接到 `apps/electron/node_modules/`
 - `electron-builder.yml` 的 `files` 配置要同时包含主包和所有平台子包：
   ```yaml
   files:
     - dist/**/*
     - package.json
-    - node_modules/@anthropic-ai/Codex-agent-sdk/**/*
-    - node_modules/@anthropic-ai/Codex-agent-sdk-darwin-arm64/**/*
-    - node_modules/@anthropic-ai/Codex-agent-sdk-darwin-x64/**/*
-    - node_modules/@anthropic-ai/Codex-agent-sdk-win32-x64/**/*
+    - node_modules/@anthropic-ai/claude-agent-sdk/**/*
+    - node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/**/*
+    - node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64/**/*
+    - node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/**/*
+    - node_modules/@earendil-works/**/*
     - "!node_modules/@proma/**"
   ```
 - SDK 主包和同级平台子包会被复制到 `app/node_modules/@anthropic-ai/`，Node.js 的模块解析能从 `app/dist/main.cjs` 找到
-- `agent-orchestrator.ts` 中 `resolveSDKCliPath()` 解析到 SDK 主包入口后，沿 `..` 到 `@anthropic-ai/` 同级目录，再拼 `Codex-agent-sdk-${platform}-${arch}/{Codex|Codex.exe}` 得到 binary 路径
+- `agent-orchestrator.ts` 中 `resolveSDKCliPath()` 解析到 SDK 主包入口后，沿 `..` 到 `@anthropic-ai/` 同级目录，再拼 `claude-agent-sdk-${platform}-${arch}/{claude|claude.exe}` 得到 binary 路径
 
 **跨平台打包限制：**
 - optionalDependencies 的平台子包由包管理器按 `os`/`cpu` 字段筛选：Apple Silicon runner 只会装 darwin-arm64，不会装 darwin-x64（cpu 不匹配）
@@ -348,13 +356,15 @@ bun run generate:icons    # 生成应用图标
 1. ✅ 确认 SDK 在 esbuild 中使用 `--external` 参数
 2. ✅ 确认 SDK 主包 + 所有目标平台子包都在 `files` 配置中
 3. ✅ 确认 `apps/electron/package.json` 的 `optionalDependencies` 列出了所有目标平台子包
-4. ✅ `bun install` 后验证 `apps/electron/node_modules/@anthropic-ai/Codex-agent-sdk-{platform}-{arch}/` symlink 存在且 binary 可执行
+4. ✅ `bun install` 后验证 `apps/electron/node_modules/@anthropic-ai/claude-agent-sdk-{platform}-{arch}/` symlink 存在且 binary 可执行
 5. ✅ 本地测试打包后的应用 Agent 功能（`CSC_IDENTITY_AUTO_DISCOVERY=false bun run dist:fast`）
+6. ✅ 若保留 pi experimental，确认 `node_modules/@earendil-works/**/*` 同时在 `files` 和 `asarUnpack` 中，打包后 `app.asar.unpacked/node_modules/@earendil-works/pi-coding-agent/dist/cli.js` 可被 Electron 以 Node 模式执行
 
 **其他依赖的打包策略：**
-- **原则**：只有 `electron` 和 `@anthropic-ai/Codex-agent-sdk` 需要标记为 `--external`
+- **原则**：只有 `electron` 和 `@anthropic-ai/claude-agent-sdk` 需要标记为 `--external`
 - `electron`：由 Electron 运行时提供，必须 external
-- `@anthropic-ai/Codex-agent-sdk`：有特殊打包要求（含 214 MB native binary），必须 external + 在 files 中包含主包和平台子包
+- `@anthropic-ai/claude-agent-sdk`：有特殊打包要求（含 214 MB native binary），必须 external + 在 files 中包含主包和平台子包
+- `@earendil-works/pi-coding-agent`：当前通过进程桥接探针运行，不 external，但需要随 `@earendil-works` scoped package 树一起打包并解包
 - **所有其他依赖**（如 `electron-updater`、`undici`、`chokidar` 等）：应该让 esbuild 打包进 `main.cjs`
   - ✅ 优点：避免遗漏子依赖，简化 electron-builder 配置
   - ❌ 如果标记为 external：必须在 `electron-builder.yml` 的 `files` 中手动列出所有子依赖
@@ -388,16 +398,18 @@ bun run generate:icons    # 生成应用图标
 
 **新增 Skill 不需要先注入 default-skills 目录的旧版本**——`upgradeDefaultSkillsInWorkspaces` 会通过"目标缺失即注入"路径让所有老工作区自动获得。
 
-## Agent SDK 集成架构
+## Agent 引擎集成架构
 
-基于 `@anthropic-ai/Codex-agent-sdk@0.2.120` 实现 Agent 模式，与 Chat 模式并行。
+Agent 模式通过运行时适配器接入底层 Agent 引擎，与 Chat 模式并行。默认引擎是 `claude-sdk`，基于 `@anthropic-ai/claude-agent-sdk@0.3.143`；`pi` 是 workspace-level 的 experimental 引擎，基于 `@earendil-works/pi-coding-agent@0.76.0` 的受保护进程桥接探针。
 
 ### 核心流程
 
 ```
-用户输入 → agent-orchestrator.ts (SDK 编排)
+用户输入 → agent-service.ts / agent-orchestrator.ts (引擎路由与编排)
   ↓
-SDK query() → SDKMessage 流
+AgentAdapterRegistry 按 session.agentEngine / workspace.agentEngine 选择适配器
+  ↓
+Claude SDK query() 或 PiAgentAdapter query() → SDKMessage 兼容流
   ↓
 convertSDKMessage() → AgentEvent[]
   ↓
@@ -419,6 +431,12 @@ React UI 更新
 - **错误处理**：SDK 错误映射 + 重试逻辑
 - **自动标题**：首次对话自动生成标题
 
+#### agent-engine.ts / agent-adapter-registry.ts（引擎路由层）
+- **工作区引擎**：`AgentWorkspace.agentEngine` 控制新会话默认底层引擎
+- **会话引擎**：`AgentSessionMeta.agentEngine` 记录会话创建时的引擎，避免工作区后续切换破坏旧会话
+- **旧会话兼容**：既有会话缺少 `agentEngine` 时固定视为 `claude-sdk`，不能继承当前工作区引擎
+- **适配器生命周期**：`claude-sdk` 与 `pi` 适配器通过注册表统一创建、复用、停止和释放
+
 #### agent-prompt-builder.ts（提示词构建，18KB）
 - **系统提示词生成**：基于工作区配置
 - **动态上下文构建**：注入工作区信息
@@ -428,9 +446,16 @@ React UI 更新
 - **工具权限检查**：基于权限规则
 - **权限模式管理**：safe / ask / allow-all
 
+#### PiAgentAdapter（实验引擎）
+- **默认禁用**：未设置 `PROMA_PI_AGENT_ENABLED=1` 时返回明确的未启用消息，不启动子进程
+- **进程探针**：启用后只运行 `@earendil-works/pi-coding-agent/dist/cli.js --help` 并返回诊断，尚未实现完整协议解析
+- **权限映射脚手架**：`safe` / `ask` / `allow-all` 的 pi 工具预检映射已定义并测试；当前 CLI 探针阶段尚未接入真实 pi 工具请求
+- **暂不支持**：fork、rewind、Claude SDK 原生 session resume、MCP 深度注入、Task/SubAgent 语义 parity、复杂队列语义
+
 ### 关键设计
 
-- **SDK 调用**：`sdk.query({ prompt, options: { apiKey, model, permissionMode, cwd, abortController } })`
+- **Claude SDK 调用**：`sdk.query({ prompt, options: { apiKey, model, permissionMode, cwd, abortController } })`
+- **Pi 调用**：`PiAgentAdapter` 当前只作为受保护进程桥接探针；不要把它标记为完整可用 Agent loop
 - **事件转换**：`convertSDKMessage()`（`@proma/shared`）将 SDK 原始消息转为统一的 `AgentEvent` 类型
 - **工具匹配**：`packages/shared/src/agent/tool-matching.ts` — 无状态 `ToolIndex` + `extractToolStarts` / `extractToolResults` 解析工具调用
 - **状态管理**：`applyAgentEvent()` 纯函数更新 `AgentStreamState`，支持流式增量更新
@@ -440,7 +465,7 @@ React UI 更新
 
 ### SDK 版本升级注意事项
 
-**`@anthropic-ai/Codex-agent-sdk` 0.2.113+ `options.env` 语义为"替换"**
+**`@anthropic-ai/claude-agent-sdk` 0.2.113+ `options.env` 语义为"替换"**
 
 - SDK 将 `options.env` **替换** 传递给子进程（0.2.111/0.2.112 短暂改为叠加，0.2.113 恢复替换）
 - 如果传 `env` 时只给 `ANTHROPIC_*` 相关变量，子进程会丢失 `PATH` / `HOME` / `SHELL` 等关键变量，导致 SDK 调用 `npx` / `git` 等命令失败
@@ -456,14 +481,17 @@ React UI 更新
 - `0.2.111`: `options.env` 从"替换"变为"叠加"
 - `0.2.113`:
   - `options.env` 回退为"替换"
-  - **SDK 包结构重构**：删除 `cli.js`，改为平台 native binary（通过 `@anthropic-ai/Codex-agent-sdk-{platform}-{arch}` optionalDependency 分发），ripgrep 编译进 binary
+  - **SDK 包结构重构**：删除 `cli.js`，改为平台 native binary（通过 `@anthropic-ai/claude-agent-sdk-{platform}-{arch}` optionalDependency 分发），ripgrep 编译进 binary
   - 详见上方"打包配置注意事项"段落
 - `0.2.120`: `query()` 省略 `settingSources` 时默认加载所有来源（Proma 已显式传 `['user', 'project']`，不受影响）
+- `0.3.142`: SDK/headless 默认使用 Task 工具（`TaskCreate` / `TaskUpdate` / `TaskGet` / `TaskList`）替代已废弃的 `TodoWrite`；MCP server 默认后台连接，慢连接会在 `init` 中呈现 `pending`
+- `0.3.143`: `@anthropic-ai/sdk` 与 `@modelcontextprotocol/sdk` 改为 peerDependencies；bun/npm/pnpm 会自动安装
 
 ### 共享类型（`@proma/shared`）
 
 - `AgentEvent`：Agent 事件（text / tool_start / tool_result / done / error）
-- `AgentSessionMeta`：会话元数据（id / title / channelId / workspaceId）
+- `AgentEngine`：底层 Agent 引擎（`claude-sdk` / `pi`），默认 `claude-sdk`
+- `AgentSessionMeta`：会话元数据（id / title / channelId / workspaceId / agentEngine）
 - `AgentMessage`：持久化消息（role + content blocks）
 - `AgentSendInput`：发送请求输入
 - `AGENT_IPC_CHANNELS`：Agent 相关 IPC 通道常量
@@ -475,7 +503,7 @@ React UI 更新
 
 - **会话管理**：收件箱/归档工作流
 - **权限模式**：safe / ask / allow-all
-- **Agent SDK**：@anthropic-ai/Codex-agent-sdk（[v1 文档](https://platform.Codex.com/docs/en/agent-sdk/typescript)、[v2 文档](https://platform.Codex.com/docs/en/agent-sdk/typescript-v2-preview)）
+- **Agent SDK**：@anthropic-ai/claude-agent-sdk（[v1 文档](https://platform.claude.com/docs/en/agent-sdk/typescript)、[v2 文档](https://platform.claude.com/docs/en/agent-sdk/typescript-v2-preview)）
 - **MCP 集成**：Model Context Protocol 用于外部数据源
 - **凭证存储**：AES-256-GCM 加密
 - **配置位置**：`~/.proma/`（类似 `~/.craft-agent/`）
@@ -485,7 +513,8 @@ React UI 更新
 ### 已实现功能
 
 - ✅ **多 Provider 支持**：Anthropic、OpenAI、DeepSeek、Kimi、智谱、MiniMax、豆包、通义千问、Google、自定义端点
-- ✅ **Agent SDK 集成**：基于 Codex Agent SDK 的完整 Agent 模式
+- ✅ **Agent SDK 集成**：基于 Claude Agent SDK 的完整 Agent 模式
+- ✅ **pi experimental 引擎**：工作区级引擎选择、会话引擎持久化、权限映射脚手架、受保护 Pi CLI 探针
 - ✅ **飞书集成**：消息同步、任务通知、OAuth 认证（68KB 核心服务）
 - ✅ **工作区管理**：多工作区隔离、MCP Server 配置、Skills 管理
 - ✅ **权限系统**：工具权限检查、用户确认流程
