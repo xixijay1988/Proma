@@ -22,6 +22,7 @@ import {
   getSdkConfigDir,
 } from './config-paths'
 import { getAgentWorkspace } from './agent-workspace-manager'
+import { resolveExistingSessionAgentEngine } from './agent-engine'
 import { DEFAULT_AGENT_ENGINE } from '@proma/shared'
 
 // 在模块加载时一次性设置 SDK 配置目录，避免在 forkSession 等异步调用中临时修改/恢复
@@ -732,7 +733,7 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
     forkTitle,
     sourceMeta.channelId,
     sourceMeta.workspaceId,
-    sourceMeta.agentEngine,
+    resolveExistingSessionAgentEngine({ session: sourceMeta }),
   )
 
   updateAgentSessionMeta(newMeta.id, {

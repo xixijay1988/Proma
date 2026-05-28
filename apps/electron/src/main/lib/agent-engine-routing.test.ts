@@ -12,8 +12,13 @@ describe('Agent engine routing', () => {
 
   test('Given legacy session without engine When workspace is pi Then existing session routes to claude-sdk', () => {
     const session = { id: 's1', title: '旧会话', workspaceId: 'w1', createdAt: 1, updatedAt: 1 } satisfies AgentSessionMeta
-    const workspace = { id: 'w1', name: 'Pi', slug: 'pi', agentEngine: 'pi', createdAt: 1, updatedAt: 1 } satisfies AgentWorkspace
 
-    expect(resolveExistingSessionAgentEngine({ session, workspace })).toBe('claude-sdk')
+    expect(resolveExistingSessionAgentEngine({ session })).toBe('claude-sdk')
+  })
+
+  test('Given pi session When resolving existing session engine Then preserves pi', () => {
+    const session = { id: 's1', title: 'Pi 会话', agentEngine: 'pi', workspaceId: 'w1', createdAt: 1, updatedAt: 1 } satisfies AgentSessionMeta
+
+    expect(resolveExistingSessionAgentEngine({ session })).toBe('pi')
   })
 })

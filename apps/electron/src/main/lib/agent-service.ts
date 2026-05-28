@@ -67,7 +67,7 @@ function resolveEngineForRun(input: AgentSendInput): AgentEngine {
   const workspaceId = input.workspaceId ?? session?.workspaceId
   const workspace = workspaceId ? getAgentWorkspace(workspaceId) : null
   return session
-    ? resolveExistingSessionAgentEngine({ session, workspace })
+    ? resolveExistingSessionAgentEngine({ session })
     : resolveAgentEngine({ workspace })
 }
 

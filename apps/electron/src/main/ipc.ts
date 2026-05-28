@@ -176,7 +176,7 @@ import {
   searchAgentSessionReferences,
 } from './lib/agent-session-manager'
 import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession } from './lib/agent-service'
-import { resolveAgentEngine } from './lib/agent-engine'
+import { resolveExistingSessionAgentEngine } from './lib/agent-engine'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
@@ -710,8 +710,7 @@ function cacheNull(key: string): null {
 
 function assertAgentSessionForkSupported(sessionId: string): void {
   const session = getAgentSessionMeta(sessionId)
-  const workspace = session?.workspaceId ? getAgentWorkspace(session.workspaceId) : null
-  const engine = resolveAgentEngine({ session, workspace })
+  const engine = resolveExistingSessionAgentEngine({ session })
   if (engine === 'pi') {
     throw new Error('pi experimental 暂不支持会话分叉。请在 Claude SDK 工作区中使用该功能。')
   }
