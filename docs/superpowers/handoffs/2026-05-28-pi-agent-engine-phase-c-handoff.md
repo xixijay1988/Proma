@@ -34,6 +34,7 @@ bun install
 - `AGENTS.md`
 - `CLAUDE.md`
 - `docs/superpowers/specs/2026-05-27-pi-agent-engine-design.md`
+- `docs/superpowers/specs/2026-05-30-pi-protocol-notes.md`
 - `docs/superpowers/plans/2026-05-27-pi-agent-engine-phase-c.md`
 - 本文件
 
@@ -214,6 +215,8 @@ bun run electron:start
 
 ### Next 1: 真实 Pi 协议发现
 
+状态：已完成，见 `docs/superpowers/specs/2026-05-30-pi-protocol-notes.md`。
+
 目标：确定 `@earendil-works/pi-coding-agent` 是否提供稳定 JSON/RPC/stdio/event stream 接口。
 
 建议步骤：
@@ -228,6 +231,15 @@ bun run electron:start
 - 明确 Pi 的启动命令、输入协议、输出协议、退出码语义。
 - 明确如何传 cwd、权限回调、abort。
 - 如果没有稳定协议，明确下一步是否转向 `@earendil-works/pi-agent-core`。
+
+结论摘要：
+
+- Phase C 首版应使用 `--mode rpc` 子进程 JSONL 协议。
+- 暂不使用 JSON mode 作为主路径，因为它没有运行中的 command channel。
+- 暂不 direct import SDK，因为 Electron main 的 ESM、Node 版本、worker/native/wasm 和资源路径风险较高。
+- Proma 需要自己实现 LF JSONL reader，不使用 Node `readline`。
+- 权限桥建议通过 Pi extension `tool_call` hook 和 RPC `extension_ui_request` / `extension_ui_response` 接入 Proma 现有 permission UI。
+- 包内 `RpcClient` 默认 spawn `"node"`，packaged Electron 中继续沿用 Proma `process.execPath + ELECTRON_RUN_AS_NODE=1` 的子进程方式。
 
 ### Next 2: Pi Runtime Message 抽象
 
