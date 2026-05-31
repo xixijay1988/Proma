@@ -143,6 +143,8 @@ export class AgentAskUserService {
       return {
         question: typeof raw.question === 'string' ? raw.question : '',
         header: typeof raw.header === 'string' ? raw.header : undefined,
+        placeholder: typeof raw.placeholder === 'string' ? raw.placeholder : undefined,
+        prefill: typeof raw.prefill === 'string' ? raw.prefill : undefined,
         options,
         multiSelect: raw.multiSelect === true,
       }

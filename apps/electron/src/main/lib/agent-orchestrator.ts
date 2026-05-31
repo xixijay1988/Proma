@@ -20,7 +20,25 @@ import { join, dirname } from 'node:path'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { app } from 'electron'
-import type { AgentSendInput, AgentMessage, AgentGenerateTitleInput, AgentProviderAdapter, AgentSessionMeta, TypedError, RetryAttempt, SDKMessage, SDKAssistantMessage, AgentStreamPayload, RewindSessionResult, SdkBeta, ProviderType, AgentEngine } from '@proma/shared'
+import type {
+  AgentSendInput,
+  AgentMessage,
+  AgentGenerateTitleInput,
+  AgentProviderAdapter,
+  AgentSessionMeta,
+  TypedError,
+  RetryAttempt,
+  SDKMessage,
+  SDKAssistantMessage,
+  AgentStreamPayload,
+  RewindSessionResult,
+  SdkBeta,
+  ProviderType,
+  AgentEngine,
+  AgentRuntimeExtensionUiRequest,
+  AgentRuntimeExtensionUiHandler,
+  AgentRuntimeExtensionUiResponse,
+} from '@proma/shared'
 import {
   PROMA_DEFAULT_PERMISSION_MODE,
   PROMA_PERMISSION_MODE_CONFIG,
@@ -40,7 +58,7 @@ import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
 import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, getAgentSessionSDKMessages, truncateSDKMessages, resolveUserUuidFromSDK, rewindFilesFromSnapshot } from './agent-session-manager'
 import { getAgentWorkspace, getWorkspaceMcpConfig, ensurePluginManifest } from './agent-workspace-manager'
-import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getWorkspaceFilesDir, getConfigDirName } from './config-paths'
+import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getWorkspaceFilesDir, getConfigDirName, getConfigDir } from './config-paths'
 import { getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
@@ -53,6 +71,7 @@ import { getMemoryConfig } from './memory-service'
 import { searchMemory, addMemory, formatSearchResult } from './memos-client'
 import { validateToolInput } from './agent-tool-input-validator'
 import { estimateTokenCount, WRITE_CONTENT_TOKEN_THRESHOLD } from './agent-tool-token-estimator'
+import { preparePiRuntimeConfig } from './adapters/pi-runtime-config'
 
 // ===== 类型定义 =====
 
@@ -74,6 +93,66 @@ export interface SessionCallbacks {
 }
 
 // ===== 工具函数 =====
+
+function buildPiExtensionAskUserInput(request: AgentRuntimeExtensionUiRequest): Record<string, unknown> {
+  const options = request.method === 'select' && Array.isArray(request.options)
+    ? request.options
+        .filter((option): option is string => typeof option === 'string' && option.trim().length > 0)
+        .map((label) => ({ label }))
+    : []
+  const fallbackQuestion = request.method === 'select'
+    ? 'Pi 需要你选择一个选项'
+    : 'Pi 需要你的输入'
+
+  return {
+    questions: [
+      {
+        question: request.message?.trim() || request.title?.trim() || fallbackQuestion,
+        header: request.title?.trim() || (request.method === 'select' ? '选择' : '输入'),
+        placeholder: request.placeholder,
+        prefill: request.prefill,
+        options,
+        multiSelect: false,
+      },
+    ],
+  }
+}
+
+function extractFirstAskUserAnswer(updatedInput: Record<string, unknown> | undefined): string | null {
+  const answers = updatedInput?.answers
+  if (!answers || typeof answers !== 'object') return null
+
+  for (const value of Object.values(answers)) {
+    if (typeof value === 'string' && value.length > 0) return value
+  }
+
+  return null
+}
+
+function buildPiRuntimePrompt(input: {
+  userMessage: string
+  modelId?: string
+  provider?: string
+}): string {
+  const modelLine = input.modelId?.trim()
+    ? `Model: ${input.modelId.trim()}`
+    : 'Model: 未指定，使用 Pi runtime 默认模型'
+  const providerLine = input.provider?.trim()
+    ? `Provider: ${input.provider.trim()}`
+    : 'Provider: 未指定，使用 Pi runtime 默认 provider'
+
+  return [
+    '<runtime_identity>',
+    '当前运行时是 Proma 的 Pi Agent experimental runtime。',
+    '底层 Agent SDK / runtime 是 @earendil-works/pi-coding-agent 的 RPC 模式，不是 Claude Agent SDK。',
+    '如果用户询问“你背后是什么 Agent SDK / runtime / 工具链”，请如实说明当前会话运行在 Pi Agent RPC runtime 上；不要回答为 Claude Agent SDK。',
+    modelLine,
+    providerLine,
+    '</runtime_identity>',
+    '',
+    input.userMessage,
+  ].join('\n')
+}
 
 /**
  * 从 stderr 中提取 API 错误信息
@@ -485,6 +564,7 @@ export class AgentOrchestrator {
   private eventBus: AgentEventBus
   private engine: AgentEngine
   private activeSessions = new Map<string, number>()
+  private piExtensionUiAbortControllers = new Map<string, AbortController>()
 
   /** 队列消息本地记录（sessionId → UUID 集合，用于防重） */
   private queuedMessageUuids = new Map<string, Set<string>>()
@@ -501,7 +581,92 @@ export class AgentOrchestrator {
     this.engine = engine
   }
 
-  private async runPiProbe(
+  /**
+   * 将 Pi 扩展 UI 请求桥接到 Proma 现有权限流程
+   */
+  private createPiExtensionUiHandler(sessionId: string, abortSignal: AbortSignal): AgentRuntimeExtensionUiHandler {
+    return async (request: AgentRuntimeExtensionUiRequest): Promise<Omit<AgentRuntimeExtensionUiResponse, 'type' | 'id'> | void> => {
+      switch (request.method) {
+        case 'confirm': {
+          const permission = permissionService.createCanUseTool(
+            sessionId,
+            (permissionRequest: PermissionRequest) => {
+              this.eventBus.emit(sessionId, {
+                kind: 'proma_event',
+                event: { type: 'permission_request', request: permissionRequest },
+              })
+            },
+          )
+
+          const result = await permission(
+            `PiExtensionUi:${request.method}`,
+            {
+              method: request.method,
+              title: request.title ?? '',
+              message: request.message ?? '',
+              options: request.options ?? [],
+              placeholder: request.placeholder ?? '',
+              prefill: request.prefill ?? '',
+            },
+            {
+              signal: abortSignal,
+              toolUseID: request.id,
+              title: request.title ?? 'Pi 需要确认',
+              description: request.message ?? 'Pi 扩展请求确认',
+              displayName: 'Pi 扩展 UI',
+              decisionReason: 'Pi 扩展 UI 请求需要用户确认',
+              decisionReasonType: 'pi_extension_ui',
+              classifierApprovable: false,
+            },
+          )
+
+          if (result.behavior === 'allow') {
+            return { confirmed: true }
+          }
+          return { cancelled: true, reason: result.message }
+        }
+
+        case 'select':
+        case 'input':
+        case 'editor': {
+          const result = await askUserService.handleAskUserQuestion(
+            sessionId,
+            buildPiExtensionAskUserInput(request),
+            abortSignal,
+            (askUserRequest: AskUserRequest) => {
+              this.eventBus.emit(sessionId, {
+                kind: 'proma_event',
+                event: { type: 'ask_user_request', request: askUserRequest },
+              })
+            },
+          )
+          if (result.behavior === 'deny') {
+            return { cancelled: true, reason: result.message }
+          }
+
+          const value = extractFirstAskUserAnswer(result.updatedInput)
+          return value
+            ? { value }
+            : { cancelled: true, reason: '用户未提供输入' }
+        }
+
+        case 'notify':
+        case 'setStatus':
+        case 'setWidget':
+        case 'set_editor_text':
+          return undefined
+
+        default:
+          console.warn(`[Agent 编排] 未知 Pi 扩展 UI 方法: ${request.method}`)
+          return {
+            cancelled: true,
+            reason: `未知的 Pi 扩展 UI 方法: ${request.method}`,
+          }
+      }
+    }
+  }
+
+  private async runPiSession(
     input: AgentSendInput,
     callbacks: SessionCallbacks,
     streamStartedAt: number,
@@ -510,6 +675,22 @@ export class AgentOrchestrator {
     const { sessionId, userMessage, modelId, workspaceId } = input
     const runStartedAt = Date.now()
     let agentCwd = homedir()
+    const piExtensionUiAbortController = new AbortController()
+    this.piExtensionUiAbortControllers.set(sessionId, piExtensionUiAbortController)
+    const channel = input.channelId ? getChannelById(input.channelId) : undefined
+    const piRuntimeConfig = preparePiRuntimeConfig({
+      promaConfigDir: getConfigDir(),
+      sessionId,
+      channel,
+      apiKey: channel ? (() => {
+        try {
+          return decryptApiKey(channel.id)
+        } catch {
+          return undefined
+        }
+      })() : undefined,
+      model: modelId,
+    })
 
     if (workspaceId) {
       const workspace = getAgentWorkspace(workspaceId)
@@ -535,9 +716,18 @@ export class AgentOrchestrator {
 
       for await (const msg of this.adapter.query({
         sessionId,
-        prompt: userMessage,
+        prompt: buildPiRuntimePrompt({
+          userMessage,
+          modelId,
+          provider: piRuntimeConfig.provider,
+        }),
         model: modelId || DEFAULT_MODEL_ID,
         cwd: agentCwd,
+        provider: piRuntimeConfig.provider,
+        runtimeSessionDir: piRuntimeConfig.sessionDir,
+        runtimeEnv: piRuntimeConfig.runtimeEnv,
+        abortSignal: piExtensionUiAbortController.signal,
+        handleExtensionUiRequest: this.createPiExtensionUiHandler(sessionId, piExtensionUiAbortController.signal),
       })) {
         if (!this.activeSessions.has(sessionId)) {
           const wasStoppedByUser = this.stoppedBySessions.delete(sessionId)
@@ -548,7 +738,8 @@ export class AgentOrchestrator {
           return
         }
 
-        if (msg.type === 'assistant' || msg.type === 'result') {
+        const msgRecord = msg as Record<string, unknown>
+        if ((msg.type === 'assistant' || msg.type === 'result') && msgRecord._promaTransient !== true) {
           accumulatedMessages.push(msg)
         }
         if (msg.type === 'result' && typeof msg.subtype === 'string') {
@@ -582,6 +773,8 @@ export class AgentOrchestrator {
       callbacks.onError(message)
       callbacks.onComplete(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt, resultSubtype: 'error' })
     } finally {
+      piExtensionUiAbortController.abort()
+      this.piExtensionUiAbortControllers.delete(sessionId)
       this.adapter.abort(sessionId)
       permissionService.clearSessionPending(sessionId)
       exitPlanService.clearSessionPending(sessionId)
@@ -946,8 +1139,10 @@ export class AgentOrchestrator {
     if (accumulatedMessages.length === 0) return
 
     const toPersist = accumulatedMessages.filter(
-      (m) => m.type === 'assistant' || m.type === 'user' || m.type === 'result'
+      (m) => ((m as Record<string, unknown>)._promaTransient !== true)
+        && (m.type === 'assistant' || m.type === 'user' || m.type === 'result'
         || (m.type === 'system' && ['compact_boundary', 'permission_denied'].includes((m as import('@proma/shared').SDKSystemMessage).subtype ?? ''))
+        )
     ).filter((m) => {
       // 过滤 SDK 内部生成的 user 文本消息（如 Skill 展开 prompt），与实时流过滤逻辑一致
       if (m.type === 'user') {
@@ -1029,7 +1224,7 @@ export class AgentOrchestrator {
     }
 
     if (this.engine === 'pi') {
-      await this.runPiProbe(input, callbacks, streamStartedAt, releaseActiveRun)
+      await this.runPiSession(input, callbacks, streamStartedAt, releaseActiveRun)
       return
     }
 
@@ -1851,7 +2046,7 @@ export class AgentOrchestrator {
                   if (hasToolResult) {
                     accumulatedMessages.push(msg)
                   }
-                } else {
+                } else if (msgRecord._promaTransient !== true) {
                   // 为 assistant 消息注入渠道 modelId，确保持久化后能正确匹配模型显示名
                   if (msg.type === 'assistant' && modelId) {
                     (msg as Record<string, unknown>)._channelModelId = modelId
@@ -2165,6 +2360,8 @@ export class AgentOrchestrator {
     this.sessionPermissionModes.delete(sessionId)
     this.stoppedBySessions.add(sessionId)
     this.queuedMessageUuids.delete(sessionId)
+    this.piExtensionUiAbortControllers.get(sessionId)?.abort()
+    this.piExtensionUiAbortControllers.delete(sessionId)
     this.adapter.abort(sessionId)
     console.log(`[Agent 编排] 已中止会话: ${sessionId}`)
   }

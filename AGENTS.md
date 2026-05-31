@@ -60,7 +60,7 @@ proma-v2/
 - **职责**：Electron 桌面应用主体，集成所有包
 - **关键依赖**：
   - `@anthropic-ai/claude-agent-sdk@0.3.143` - 默认 Agent 引擎
-  - `@earendil-works/pi-coding-agent@0.76.0` - pi experimental 进程桥接探针
+  - `@earendil-works/pi-coding-agent@0.76.0` - pi experimental RPC 进程桥接
   - `@larksuiteoapi/node-sdk` - 飞书集成
   - Radix UI、TipTap、Tailwind CSS
   - 文件解析：`pdf-parse`、`officeparser`、`word-extractor`
@@ -176,9 +176,9 @@ bun run generate:icons    # 生成应用图标
 | `agent-orchestrator.ts` | Agent 核心编排层（71KB）：并发守卫、渠道查找、环境变量构建、运行时适配器调用、消息持久化、事件流处理、错误处理、自动标题生成 |
 | `agent-engine.ts` | Agent 引擎解析：新会话跟随工作区引擎，既有会话无 `agentEngine` 时固定视为 `claude-sdk` |
 | `agent-adapter-registry.ts` | Agent 适配器注册表：按 `claude-sdk` / `pi` 管理运行时适配器生命周期 |
-| `adapters/pi-agent-adapter.ts` | pi experimental 适配器：默认 guard，启用后仅做 Pi CLI 探针和诊断输出 |
-| `adapters/pi-event-converter.ts` | pi 事件转换脚手架：定义未来 pi 文本/工具事件到 Proma 兼容 SDKMessage 的转换边界，当前真实运行尚未解析 pi 协议事件 |
-| `adapters/pi-permission-mapping.ts` | pi 权限映射脚手架：定义 Proma safe / ask / allow-all 到 pi 工具预检决策的映射，当前 CLI 探针阶段尚未接入真实 pi 工具请求 |
+| `adapters/pi-agent-adapter.ts` | pi experimental 适配器：通过 Pi RPC 进程桥接，将文本、工具、完成、错误和 extension UI 请求转换为 Proma 兼容事件 |
+| `adapters/pi-event-converter.ts` | pi 事件转换：定义 pi 文本/工具事件到 Proma 兼容 SDKMessage 的转换边界 |
+| `adapters/pi-permission-mapping.ts` | pi 权限映射脚手架：定义 Proma safe / ask / allow-all 到 pi 工具预检决策的映射 |
 | `agent-session-manager.ts` | Agent 会话管理：SDK 消息持久化、会话元数据 CRUD、JSONL 存储 |
 | `agent-prompt-builder.ts` | Agent 系统提示词构建（18KB）：动态上下文构建、内置 Agent 构建、工作区上下文注入 |
 | `agent-permission-service.ts` | Agent 权限管理：工具权限检查、权限模式管理 |
@@ -364,7 +364,7 @@ bun run generate:icons    # 生成应用图标
 - **原则**：只有 `electron` 和 `@anthropic-ai/claude-agent-sdk` 需要标记为 `--external`
 - `electron`：由 Electron 运行时提供，必须 external
 - `@anthropic-ai/claude-agent-sdk`：有特殊打包要求（含 214 MB native binary），必须 external + 在 files 中包含主包和平台子包
-- `@earendil-works/pi-coding-agent`：当前通过进程桥接探针运行，不 external，但需要随 `@earendil-works` scoped package 树一起打包并解包
+- `@earendil-works/pi-coding-agent`：当前通过独立 CLI 进程以 `--mode rpc` 运行，不 external，但需要随 `@earendil-works` scoped package 树一起打包并解包
 - **所有其他依赖**（如 `electron-updater`、`undici`、`chokidar` 等）：应该让 esbuild 打包进 `main.cjs`
   - ✅ 优点：避免遗漏子依赖，简化 electron-builder 配置
   - ❌ 如果标记为 external：必须在 `electron-builder.yml` 的 `files` 中手动列出所有子依赖
@@ -400,7 +400,7 @@ bun run generate:icons    # 生成应用图标
 
 ## Agent 引擎集成架构
 
-Agent 模式通过运行时适配器接入底层 Agent 引擎，与 Chat 模式并行。默认引擎是 `claude-sdk`，基于 `@anthropic-ai/claude-agent-sdk@0.3.143`；`pi` 是 workspace-level 的 experimental 引擎，基于 `@earendil-works/pi-coding-agent@0.76.0` 的受保护进程桥接探针。
+Agent 模式通过运行时适配器接入底层 Agent 引擎，与 Chat 模式并行。默认引擎是 `claude-sdk`，基于 `@anthropic-ai/claude-agent-sdk@0.3.143`；`pi` 是 workspace-level 的 experimental 引擎，基于 `@earendil-works/pi-coding-agent@0.76.0` 的 RPC 进程桥接。
 
 ### 核心流程
 
@@ -447,15 +447,17 @@ React UI 更新
 - **权限模式管理**：safe / ask / allow-all
 
 #### PiAgentAdapter（实验引擎）
-- **默认禁用**：未设置 `PROMA_PI_AGENT_ENABLED=1` 时返回明确的未启用消息，不启动子进程
-- **进程探针**：启用后只运行 `@earendil-works/pi-coding-agent/dist/cli.js --help` 并返回诊断，尚未实现完整协议解析
-- **权限映射脚手架**：`safe` / `ask` / `allow-all` 的 pi 工具预检映射已定义并测试；当前 CLI 探针阶段尚未接入真实 pi 工具请求
+- **默认启用**：`PROMA_PI_AGENT_ENABLED=0` 时显式禁用；未设置时允许启动 Pi RPC 运行时
+- **RPC 进程桥接**：通过 `@earendil-works/pi-coding-agent/dist/cli.js --mode rpc` 启动，按 Proma session 写入 Pi 原生 `--session-id` / `--session-dir`
+- **事件桥接**：文本 delta、工具开始/结束、成功完成、协议错误、prompt 拒绝和进程终止诊断会转换为 Proma 兼容 SDKMessage
+- **Extension UI 桥接**：Pi `confirm` 接入 Proma 权限流程，`select` / `input` / `editor` 接入 AskUser 流程；`notify` / `setStatus` / `setWidget` / `set_editor_text` 当前按 fire-and-forget 处理
+- **渠道映射**：Proma 渠道会映射为 Pi provider、API Key 环境变量和隔离的 `models.json`；OpenAI 兼容类 provider 仍属于最小兼容映射，需要继续做真实模型兼容性验证
 - **暂不支持**：fork、rewind、Claude SDK 原生 session resume、MCP 深度注入、Task/SubAgent 语义 parity、复杂队列语义
 
 ### 关键设计
 
 - **Claude SDK 调用**：`sdk.query({ prompt, options: { apiKey, model, permissionMode, cwd, abortController } })`
-- **Pi 调用**：`PiAgentAdapter` 当前只作为受保护进程桥接探针；不要把它标记为完整可用 Agent loop
+- **Pi 调用**：`PiAgentAdapter` 当前提供 Pi RPC 最小可用 loop；不要把它标记为与 Claude SDK 完全 parity
 - **事件转换**：`convertSDKMessage()`（`@proma/shared`）将 SDK 原始消息转为统一的 `AgentEvent` 类型
 - **工具匹配**：`packages/shared/src/agent/tool-matching.ts` — 无状态 `ToolIndex` + `extractToolStarts` / `extractToolResults` 解析工具调用
 - **状态管理**：`applyAgentEvent()` 纯函数更新 `AgentStreamState`，支持流式增量更新
@@ -514,7 +516,7 @@ React UI 更新
 
 - ✅ **多 Provider 支持**：Anthropic、OpenAI、DeepSeek、Kimi、智谱、MiniMax、豆包、通义千问、Google、自定义端点
 - ✅ **Agent SDK 集成**：基于 Claude Agent SDK 的完整 Agent 模式
-- ✅ **pi experimental 引擎**：工作区级引擎选择、会话引擎持久化、权限映射脚手架、受保护 Pi CLI 探针
+- ✅ **pi experimental 引擎**：工作区级引擎选择、会话引擎持久化、Pi RPC 进程桥接、权限/AskUser extension UI 桥接、运行时渠道映射
 - ✅ **飞书集成**：消息同步、任务通知、OAuth 认证（68KB 核心服务）
 - ✅ **工作区管理**：多工作区隔离、MCP Server 配置、Skills 管理
 - ✅ **权限系统**：工具权限检查、用户确认流程

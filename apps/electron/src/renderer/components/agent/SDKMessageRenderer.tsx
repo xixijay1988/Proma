@@ -492,6 +492,34 @@ export function buildHistoricalTaskSubjects(allMessages: SDKMessage[]): Map<stri
 
 // ===== AssistantTurnRenderer — 渲染一个完整的 assistant turn =====
 
+function mergeAdjacentTextBlocks(blocks: SDKContentBlock[]): SDKContentBlock[] {
+  const merged: SDKContentBlock[] = []
+
+  for (const block of blocks) {
+    const previous = merged[merged.length - 1]
+    if (
+      previous?.type === 'text'
+      && block.type === 'text'
+      && 'text' in previous
+      && 'text' in block
+    ) {
+      merged[merged.length - 1] = {
+        ...previous,
+        text: `${previous.text}${block.text}`,
+      } as SDKContentBlock
+      continue
+    }
+
+    merged.push(block)
+  }
+
+  return merged
+}
+
+export function mergeAdjacentTextBlocksForTest(blocks: SDKContentBlock[]): SDKContentBlock[] {
+  return mergeAdjacentTextBlocks(blocks)
+}
+
 export interface AssistantTurnRendererProps {
   turn: AssistantTurn
   /** 所有消息（全局，供工具结果查找跨 turn 的结果） */
@@ -568,7 +596,7 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
   }
 
   const childBlocksMap = new Map<string, SDKContentBlock[]>()
-  const topLevelBlocks: SDKContentBlock[] = []
+  const rawTopLevelBlocks: SDKContentBlock[] = []
 
   for (const eb of enrichedBlocks) {
     if (eb.parentToolUseId && agentToolIds.has(eb.parentToolUseId)) {
@@ -576,9 +604,10 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
       children.push(eb.block)
       childBlocksMap.set(eb.parentToolUseId, children)
     } else {
-      topLevelBlocks.push(eb.block)
+      rawTopLevelBlocks.push(eb.block)
     }
   }
+  const topLevelBlocks = mergeAdjacentTextBlocks(rawTopLevelBlocks)
 
   // 检测是否有主要内容（text 块），用于决定 tool/thinking 是否 dimmed
   const hasTextContent = topLevelBlocks.some(

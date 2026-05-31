@@ -170,9 +170,15 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
         return [{ type: 'error', message: aMsg.error.message }]
       }
       const events: AgentEvent[] = []
+      const isTextDelta = (aMsg as unknown as Record<string, unknown>)._promaTextDelta === true
       for (const block of aMsg.message.content) {
         if (block.type === 'text' && 'text' in block) {
-          events.push({ type: 'text_complete', text: (block as { text: string }).text, isIntermediate: false, parentToolUseId: aMsg.parent_tool_use_id ?? undefined })
+          const text = (block as { text: string }).text
+          if (isTextDelta) {
+            events.push({ type: 'text_delta', text, parentToolUseId: aMsg.parent_tool_use_id ?? undefined })
+          } else {
+            events.push({ type: 'text_complete', text, isIntermediate: false, parentToolUseId: aMsg.parent_tool_use_id ?? undefined })
+          }
         } else if (block.type === 'tool_use') {
           const tb = block as SDKContentBlock & { id: string; name: string; input: Record<string, unknown> }
           const intent = (tb.input._intent as string | undefined)
@@ -580,7 +586,7 @@ export function useGlobalAgentListeners(): void {
           // 它通过下方 legacyEvents 分支写入 agentPromptSuggestionsAtom，显示在输入框上方
           if (msgRecord.type === 'prompt_suggestion') {
             // 跳过写入 liveMessages
-          } else if (!msgRecord.isReplay) {
+          } else if (!msgRecord.isReplay && msgRecord._promaTransient !== true) {
             // 为实时消息补充 _createdAt 时间戳（与持久化时的逻辑一致），
             // 避免 AssistantTurnRenderer 因缺少时间戳导致 header 时间消失
             if (typeof msgRecord._createdAt !== 'number') {

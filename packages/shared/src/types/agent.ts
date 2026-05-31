@@ -1075,6 +1075,10 @@ export interface AskUserQuestion {
   question: string
   /** 短标签（chip 显示） */
   header?: string
+  /** 输入占位提示 */
+  placeholder?: string
+  /** 输入预填内容 */
+  prefill?: string
   /** 可选项列表 */
   options: AskUserQuestionOption[]
   /** 是否支持多选 */

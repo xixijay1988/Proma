@@ -17,7 +17,7 @@ Proma 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agen
 ## 现在能做什么
 
 - **Chat 模式**：多模型对话、附件解析、图片输入、Markdown / Mermaid / KaTeX / 代码高亮、并排对话、系统提示词、上下文管理。
-- **Agent 模式**：默认基于 `@anthropic-ai/claude-agent-sdk` 的通用 Agent，支持工作区隔离、权限模式、文件操作、长任务流式输出、计划确认和用户追问；工作区可切换到 `pi experimental` 引擎做早期验证。
+- **Agent 模式**：默认基于 `@anthropic-ai/claude-agent-sdk` 的通用 Agent，支持工作区隔离、权限模式、文件操作、长任务流式输出、计划确认和用户追问；工作区也可切换到 `pi experimental` 引擎，使用 Pi RPC 进程桥接运行本地 coding 最小闭环。
 - **SubAgent / Tasks**：复杂任务可以通过 Claude Agent SDK 的 Agent 工具拆分为子 Agent / Task，并在消息流中展示调用过程和结果。
 - **Skills & MCP**：每个工作区可以独立配置 Skills、MCP Server 和工作区文件，适合沉淀可复用能力。
 - **远程机器人**：支持飞书 / Lark 机器人桥接，并已提供钉钉、微信桥接入口，用手机或群聊触发本机 Agent 工作流。
@@ -39,7 +39,7 @@ Proma 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agen
 2. 进入 **设置 > 渠道**，添加至少一个 AI 供应商渠道，填写 Base URL、API Key 和模型列表。
 3. Chat 模式可以使用 OpenAI、Anthropic、Google 或 OpenAI 兼容协议的渠道。
 4. Agent 模式需要 Anthropic 协议或 Anthropic 兼容协议渠道，例如 Anthropic、DeepSeek、Kimi API、Kimi Coding Plan。
-5. 进入 **设置 > Agent**，选择默认 Agent 渠道、模型和工作区。默认引擎是 `Claude SDK`；`pi experimental` 仅用于实验验证。
+5. 进入 **设置 > Agent**，选择默认 Agent 渠道、模型和工作区。默认引擎是 `Claude SDK`；`pi experimental` 可作为工作区级实验引擎使用。
 6. 如需记忆、联网搜索、飞书 / 钉钉 / 微信桥接，在设置页对应 Tab 中继续配置。
 
 ## 模式选择
@@ -109,7 +109,7 @@ Proma 支持豆包的流式语音输入功能，并且支持在 Proma 内使用�
 | 通义千问 | 支持 | 支持 | Anthropic 兼容协议 |
 | 自定义端点 | 支持 | 暂不支持 | OpenAI 兼容协议 |
 
-Agent 模式默认使用 Claude Agent SDK，因此要求渠道提供 Anthropic 或 Anthropic 兼容协议。`pi experimental` 是按工作区选择的实验引擎，当前默认不启用真实进程桥接；即使设置 `PROMA_PI_AGENT_ENABLED=1`，也只完成 Pi CLI 探针和诊断输出，尚未实现完整协议解析、分叉、回退、Claude SDK 原生恢复、MCP 深度注入、Task/SubAgent parity 或复杂队列语义。Chat 模式则通过 `@proma/core` 的 Provider Adapter 统一接入不同协议。
+Agent 模式默认使用 Claude Agent SDK，因此要求渠道提供 Anthropic 或 Anthropic 兼容协议。`pi experimental` 是按工作区选择的实验引擎，当前通过 `@earendil-works/pi-coding-agent` 的 RPC 模式运行，支持文本流、工具活动、Pi extension UI 请求桥接、按 Proma 会话隔离的 Pi 原生 session 文件，以及 Proma 渠道到 Pi provider / env / `models.json` 的最小映射。它仍处于实验阶段，暂未实现分叉、回退、Claude SDK 原生恢复、MCP 深度注入、Task/SubAgent parity 或复杂队列语义。设置 `PROMA_PI_AGENT_ENABLED=0` 可显式禁用 Pi 运行时。Chat 模式则通过 `@proma/core` 的 Provider Adapter 统一接入不同协议。
 
 ## 本地数据
 
@@ -229,7 +229,7 @@ shared 类型和 IPC 常量
 - `agent-engine.ts` / `agent-adapter-registry.ts`：解析会话/工作区 Agent 引擎并管理 Claude SDK 与 pi experimental 适配器。
 - `agent-session-manager.ts`：Agent 会话索引和 JSONL 消息持久化。
 - `agent-workspace-manager.ts`：工作区、MCP、Skills 和工作区文件管理。
-- `adapters/pi-*`：pi experimental 的事件转换/权限映射脚手架和受保护进程桥接；当前真实运行只到 CLI 探针诊断。
+- `adapters/pi-*`：pi experimental 的 RPC 进程桥接、事件转换、权限映射和运行时配置。Pi 输出会被转换为 Proma 兼容的 SDKMessage 流。
 - `chat-service.ts`：Chat 流式调用、Provider Adapter、工具活动。
 - `conversation-manager.ts`：Chat 会话索引和消息存储。
 - `channel-manager.ts`：渠道 CRUD、API Key 加密、连接测试、模型获取。
@@ -242,14 +242,14 @@ shared 类型和 IPC 常量
 
 `@anthropic-ai/claude-agent-sdk` 在 `0.2.113+` 后改为平台 native binary 分发。Proma 的 esbuild 配置会把 SDK 标记为 external，`electron-builder.yml` 会把 SDK 主包和平台子包一起打进安装包。
 
-`pi experimental` 使用 `@earendil-works/pi-coding-agent@0.76.0`。由于当前桥接通过独立 CLI 进程探针运行，`electron-builder.yml` 需要同时包含并解包 `node_modules/@earendil-works/**/*`。不要改用未 scoped 的 `pi-*` 包。
+`pi experimental` 使用 `@earendil-works/pi-coding-agent@0.76.0`。由于当前桥接通过独立 CLI 进程以 `--mode rpc` 运行，`electron-builder.yml` 需要同时包含并解包 `node_modules/@earendil-works/**/*`。不要改用未 scoped 的 `pi-*` 包。
 
 修改打包配置时请特别确认：
 
 - 主进程 esbuild 保持 `--external:@anthropic-ai/claude-agent-sdk`。
 - `apps/electron/package.json` 的 `optionalDependencies` 包含目标平台的 SDK 子包。
 - `apps/electron/electron-builder.yml` 的 `files` 包含 SDK 主包和平台子包。
-- `apps/electron/electron-builder.yml` 的 `files` 和 `asarUnpack` 包含 `node_modules/@earendil-works/**/*`，否则启用 pi 探针时找不到 CLI 或其依赖。
+- `apps/electron/electron-builder.yml` 的 `files` 和 `asarUnpack` 包含 `node_modules/@earendil-works/**/*`，否则启用 pi runtime 时找不到 CLI 或其依赖。
 - 其它普通 npm 依赖通常应由 esbuild 打包进 `main.cjs`，不要随意 external。
 
 更完整的工程约定见 [AGENTS.md](./AGENTS.md)。

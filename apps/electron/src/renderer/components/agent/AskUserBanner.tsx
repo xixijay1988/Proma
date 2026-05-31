@@ -29,6 +29,22 @@ function safeUrlTransform(url: string): string {
   return defaultUrlTransform(url)
 }
 
+function createInitialQuestionAnswer(question?: AskUserQuestion): QuestionAnswer {
+  if (!question) return EMPTY_ANSWER
+  if (question.options.length === 0) {
+    return {
+      selected: [],
+      customText: question.prefill ?? '',
+      showCustom: true,
+    }
+  }
+
+  const firstOpt = question.options[0]
+  return firstOpt
+    ? { ...EMPTY_ANSWER, selected: [firstOpt.label] }
+    : EMPTY_ANSWER
+}
+
 /** AskUserBanner 属性接口 */
 interface AskUserBannerProps {
   sessionId: string
@@ -71,10 +87,8 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
     clearAutoAdvanceTimer()
     setActiveTab(0)
     setFocusedOptIdx(-1)
-    const firstOpt = questions[0]?.options[0]
-    setAnswers(firstOpt
-      ? new Map([[0, { ...EMPTY_ANSWER, selected: [firstOpt.label] }]])
-      : new Map())
+    const firstQuestion = questions[0]
+    setAnswers(firstQuestion ? new Map([[0, createInitialQuestionAnswer(firstQuestion)]]) : new Map())
   }, [request?.requestId])
 
   // 切换 Tab 时重置焦点并默认选中第一个选项
@@ -82,10 +96,10 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
     setFocusedOptIdx(-1)
     setAnswers((prev) => {
       if (prev.has(activeTab)) return prev
-      const firstOpt = questions[activeTab]?.options[0]
-      if (!firstOpt) return prev
+      const nextQuestion = questions[activeTab]
+      if (!nextQuestion) return prev
       const map = new Map(prev)
-      map.set(activeTab, { ...EMPTY_ANSWER, selected: [firstOpt.label] })
+      map.set(activeTab, createInitialQuestionAnswer(nextQuestion))
       return map
     })
   }, [activeTab])
@@ -100,6 +114,7 @@ export function AskUserBanner({ sessionId }: AskUserBannerProps): React.ReactEle
       const curFocusIdx = focusedOptIdxRef.current
       const q = qs[curTab]
       if (!q) return
+      if (q.options.length === 0) return
       const itemCount = q.options.length + 1
       const lastTab = curTab >= qs.length - 1
 
@@ -363,6 +378,7 @@ function QuestionCard({
     ? question.options[focusedIndex]
     : question.options.find((o) => answer.selected.includes(o.label))
   const previewContent = previewOption?.preview
+  const freeTextQuestion = question.options.length === 0
 
   return (
     <div className="space-y-2">
@@ -376,60 +392,76 @@ function QuestionCard({
         <p className="text-sm text-foreground">{question.question}</p>
       </div>
 
-      {/* 竖向选项 */}
-      <div className="flex flex-col gap-1">
-        {question.options.map((option, idx) => {
-          const isSelected = answer.selected.includes(option.label)
-          const isFocused = focusedIndex === idx
-          return (
-            <button
-              key={option.label}
-              type="button"
-              className={`
-                flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-all outline-none text-left
-                ${isSelected
-                  ? 'bg-primary text-primary-foreground shadow-sm'
-                  : 'bg-muted/50 text-foreground/80 hover:bg-muted'
-                }
-                ${isFocused ? 'ring-2 ring-primary/50 ring-offset-1 ring-offset-card' : ''}
-              `}
-              onClick={() => onToggleOption(option.label)}
-            >
-              <span className={`text-[10px] shrink-0 ${isSelected ? 'text-primary-foreground/60' : 'text-muted-foreground/50'}`}>
-                {idx + 1}
-              </span>
-              <span className="font-medium">{option.label}</span>
-              {option.description && (
-                <span className={`text-[11px] ${isSelected ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
-                  {option.description}
-                </span>
-              )}
-            </button>
-          )
-        })}
-
-        {/* "其他" */}
-        <button
-          type="button"
-          className={`
-            flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-all outline-none text-left
-            ${answer.showCustom
-              ? 'bg-primary text-primary-foreground shadow-sm'
-              : 'bg-muted/50 text-foreground/80 hover:bg-muted'
+      {freeTextQuestion ? (
+        <textarea
+          className="min-h-28 w-full px-3 py-2 rounded-lg text-xs bg-muted/40 focus:bg-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30 placeholder:text-muted-foreground/40 transition-colors resize-y"
+          placeholder={question.placeholder ?? '输入内容...'}
+          value={answer.customText}
+          onChange={(e) => onCustomTextChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault()
+              e.stopPropagation()
+              onSubmit()
             }
-            ${focusedIndex === optionCount ? 'ring-2 ring-primary/50 ring-offset-1 ring-offset-card' : ''}
-          `}
-          onClick={onToggleCustom}
-        >
-          <span className={`text-[10px] shrink-0 ${answer.showCustom ? 'text-primary-foreground/60' : 'text-muted-foreground/50'}`}>
-            {optionCount + 1}
-          </span>
-          <span className="font-medium">其他...</span>
-        </button>
-      </div>
+          }}
+          autoFocus
+        />
+      ) : (
+        <div className="flex flex-col gap-1">
+          {question.options.map((option, idx) => {
+            const isSelected = answer.selected.includes(option.label)
+            const isFocused = focusedIndex === idx
+            return (
+              <button
+                key={option.label}
+                type="button"
+                className={`
+                  flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-all outline-none text-left
+                  ${isSelected
+                    ? 'bg-primary text-primary-foreground shadow-sm'
+                    : 'bg-muted/50 text-foreground/80 hover:bg-muted'
+                  }
+                  ${isFocused ? 'ring-2 ring-primary/50 ring-offset-1 ring-offset-card' : ''}
+                `}
+                onClick={() => onToggleOption(option.label)}
+              >
+                <span className={`text-[10px] shrink-0 ${isSelected ? 'text-primary-foreground/60' : 'text-muted-foreground/50'}`}>
+                  {idx + 1}
+                </span>
+                <span className="font-medium">{option.label}</span>
+                {option.description && (
+                  <span className={`text-[11px] ${isSelected ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
+                    {option.description}
+                  </span>
+                )}
+              </button>
+            )
+          })}
+
+          {/* "其他" */}
+          <button
+            type="button"
+            className={`
+              flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-all outline-none text-left
+              ${answer.showCustom
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'bg-muted/50 text-foreground/80 hover:bg-muted'
+              }
+              ${focusedIndex === optionCount ? 'ring-2 ring-primary/50 ring-offset-1 ring-offset-card' : ''}
+            `}
+            onClick={onToggleCustom}
+          >
+            <span className={`text-[10px] shrink-0 ${answer.showCustom ? 'text-primary-foreground/60' : 'text-muted-foreground/50'}`}>
+              {optionCount + 1}
+            </span>
+            <span className="font-medium">其他...</span>
+          </button>
+        </div>
+      )}
 
       {/* 自由文本输入 */}
-      {answer.showCustom && (
+      {answer.showCustom && !freeTextQuestion && (
         <input
           type="text"
           className="w-full px-3 py-2 rounded-lg text-xs bg-muted/40 focus:bg-muted/60 focus:outline-none focus:ring-2 focus:ring-primary/30 placeholder:text-muted-foreground/40 transition-colors"

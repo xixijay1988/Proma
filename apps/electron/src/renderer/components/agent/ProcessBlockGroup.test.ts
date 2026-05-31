@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { buildAssistantTurnRenderItems, buildProcessGroupToolNames } from './ProcessBlockGroup'
+import { mergeAdjacentTextBlocksForTest } from './SDKMessageRenderer'
 import type { SDKContentBlock } from '@proma/shared'
 
 const tool = (id: string, name = 'Read'): SDKContentBlock => ({
@@ -141,5 +142,23 @@ describe('Agent 过程块折叠分组', () => {
     ])
 
     expect(toolNames).toEqual(['Grep', 'Read', 'Bash'])
+  })
+
+  test('given adjacent Pi text delta blocks when normalizing then merges them into one markdown block', () => {
+    const blocks = mergeAdjacentTextBlocksForTest([
+      text('✅'),
+      text(' **'),
+      text('测试'),
+      text('成功'),
+      tool('tool-1'),
+      text('后续'),
+      text('文本'),
+    ])
+
+    expect(blocks).toEqual([
+      text('✅ **测试成功'),
+      tool('tool-1'),
+      text('后续文本'),
+    ])
   })
 })

@@ -18,6 +18,34 @@ export interface SDKUserMessageInput {
   session_id: string
 }
 
+/** Runtime 扩展 UI 请求（当前由 Pi RPC extension_ui_request 使用） */
+export interface AgentRuntimeExtensionUiRequest {
+  type: 'extension_ui_request'
+  id: string
+  method: string
+  title?: string
+  message?: string
+  options?: string[]
+  placeholder?: string
+  prefill?: string
+  timeout?: number
+  [key: string]: unknown
+}
+
+/** Runtime 扩展 UI 响应（当前写回 Pi RPC extension_ui_response） */
+export interface AgentRuntimeExtensionUiResponse {
+  type: 'extension_ui_response'
+  id: string
+  confirmed?: boolean
+  value?: string
+  cancelled?: boolean
+  [key: string]: unknown
+}
+
+export type AgentRuntimeExtensionUiHandler = (
+  request: AgentRuntimeExtensionUiRequest
+) => Promise<Omit<AgentRuntimeExtensionUiResponse, 'type' | 'id'> | void>
+
 /**
  * Agent 查询输入（Provider 无关）
  *
@@ -33,8 +61,16 @@ export interface AgentQueryInput {
   model?: string
   /** Agent 工作目录 */
   cwd?: string
+  /** Runtime 原生 provider 名称（如 Pi RPC 的 provider） */
+  provider?: string
+  /** Runtime 原生会话目录（如 Pi RPC 的 --session-dir） */
+  runtimeSessionDir?: string
+  /** 传给底层 Runtime 子进程的额外环境变量 */
+  runtimeEnv?: Record<string, string | undefined>
   /** 中止信号 */
   abortSignal?: AbortSignal
+  /** Runtime 扩展 UI 请求处理器（如 Pi RPC extension UI） */
+  handleExtensionUiRequest?: AgentRuntimeExtensionUiHandler
 }
 
 /**
