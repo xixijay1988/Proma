@@ -446,7 +446,7 @@ ${skillList}
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="claude-sdk">Claude SDK</SelectItem>
-                <SelectItem value="pi">pi experimental</SelectItem>
+                <SelectItem value="pi">Pi Agent RPC (experimental)</SelectItem>
               </SelectContent>
             </Select>
           </SettingsRow>

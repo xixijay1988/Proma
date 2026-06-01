@@ -85,6 +85,24 @@ bun run --filter='@proma/electron' dev
 
 Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、真实 RPC 工具读写、最终消息持久化都已通过最小验收。仍建议补一轮可视 UI 手工检查，重点看工具过程折叠、刷新历史后的显示和中断按钮。
 
+## 2026-06-01 Phase E Runtime Proof UI
+
+- 新增统一 UI helper：`apps/electron/src/renderer/lib/agent-engine-ui.ts`
+  - `getAgentEngineLabel('pi')` 现在返回 `Pi Agent RPC`。
+  - `getAgentEngineRuntimeProof('pi')` 明确描述为 `@earendil-works/pi-coding-agent RPC runtime，不是 Claude Agent SDK`。
+- Agent 会话头现在会在标题旁显示 runtime badge：
+  - Pi 会话显示 `Pi Agent RPC` amber badge。
+  - Claude 会话显示 `Claude SDK` neutral badge。
+  - badge 的 `title` 包含底层 runtime 证明文案。
+- 工作区列表沿用同一 helper，因此 Pi 工作区 badge 也显示为 `Pi Agent RPC`。
+- Agent 设置页引擎选项改为 `Pi Agent RPC (experimental)`，避免继续使用过于含糊的 `pi experimental`。
+- Pi 会话顶部提示条改为说明通过 `@earendil-works/pi-coding-agent` 运行本地 coding 最小闭环。
+- 验证：
+  - `bun test apps/electron/src/renderer/lib/agent-engine-ui.test.ts apps/electron/src/renderer/components/agent/ProcessBlockGroup.test.ts`：14 pass / 0 fail。
+  - `bun run typecheck`：通过。
+  - `bun run electron:build`：通过，仅既有 Vite chunk size warning。
+  - `bun test`：103 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

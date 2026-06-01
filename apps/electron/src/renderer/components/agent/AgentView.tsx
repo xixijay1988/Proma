@@ -1943,7 +1943,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
         {isPiAgentEngine && (
           <div className="mx-4 mb-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-700 dark:text-amber-300">
-            pi experimental 当前支持本地 coding 最小闭环，分叉、回退和 Claude SDK 原生恢复暂不可用。
+            Pi Agent RPC experimental 当前通过 @earendil-works/pi-coding-agent 运行本地 coding 最小闭环；分叉、回退和 Claude SDK 原生恢复暂不可用。
           </div>
         )}
 

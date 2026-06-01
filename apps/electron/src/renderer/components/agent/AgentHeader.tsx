@@ -13,6 +13,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { agentSessionsAtom, agentSidePanelOpenAtom, workspaceFilesVersionAtom } from '@/atoms/agent-atoms'
 import { tabsAtom, updateTabTitle } from '@/atoms/tab-atoms'
 import { registerShortcut } from '@/lib/shortcut-registry'
+import { getAgentEngineRuntimeProof } from '@/lib/agent-engine-ui'
+import { DEFAULT_AGENT_ENGINE } from '@proma/shared'
 
 /** AgentHeader 属性接口 */
 interface AgentHeaderProps {
@@ -42,6 +44,8 @@ export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement
   }, [togglePanel])
 
   if (!session) return null
+
+  const runtimeProof = getAgentEngineRuntimeProof(session.agentEngine ?? DEFAULT_AGENT_ENGINE)
 
   /** 进入编辑模式 */
   const startEdit = (): void => {
@@ -120,6 +124,16 @@ export function AgentHeader({ sessionId }: AgentHeaderProps): React.ReactElement
           <div className="flex items-center gap-1.5 flex-1 min-w-0">
             <span className="truncate text-sm font-medium text-foreground">
               {session.title}
+            </span>
+            <span
+              className={
+                runtimeProof.tone === 'warning'
+                  ? 'titlebar-no-drag flex-shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300'
+                  : 'titlebar-no-drag flex-shrink-0 rounded bg-foreground/[0.06] px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground'
+              }
+              title={runtimeProof.description}
+            >
+              {runtimeProof.label}
             </span>
             <button
               type="button"
