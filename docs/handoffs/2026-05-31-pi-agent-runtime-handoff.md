@@ -103,6 +103,15 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun run electron:build`：通过，仅既有 Vite chunk size warning。
   - `bun test`：103 pass / 0 fail。
 
+## 2026-06-01 Phase F 协议硬化起步
+
+- `PiAgentAdapter` 现在会识别并记录未知 Pi RPC 事件类型：
+  - 未知事件不会产出 UI 消息，不会打断当前会话。
+  - 同一种未知事件类型只记录一次 warning，避免重复事件刷屏。
+  - warning 文案为中文：`[Pi Agent] 未识别 Pi RPC 事件，已跳过: <eventType>`。
+- 新增 BDD 测试覆盖：未知事件出现后仍能继续收到 `agent_end` 并返回 `success`。
+- 这一步是协议兼容性护栏，方便后续遇到 Pi 新事件类型时定位，而不是静默丢失上下文。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

@@ -10,6 +10,16 @@ import { startPiRpcSession, type PiRpcEvent, type StartedPiRpcSession } from './
 
 const PI_UNSUPPORTED_MESSAGE = 'Pi 进程集成尚未在此构建中实现或启用。'
 const PI_RPC_TERMINATED_MESSAGE = 'Pi RPC 会话在完成前结束。'
+const KNOWN_PI_RPC_EVENT_TYPES = new Set([
+  'agent_end',
+  'extension_ui_request',
+  'message_end',
+  'message_update',
+  'protocol_error',
+  'response',
+  'tool_execution_end',
+  'tool_execution_start',
+])
 
 function isPiAgentEnabled(): boolean {
   return process.env.PROMA_PI_AGENT_ENABLED !== '0'
@@ -250,6 +260,15 @@ function convertPiRpcEvent(input: AgentQueryInput, event: PiRpcEvent): SDKMessag
 export class PiAgentAdapter implements AgentProviderAdapter {
   readonly name = 'pi' as const
   private readonly processes = new Map<string, StartedPiRpcSession>()
+  private readonly unknownEventTypes = new Set<string>()
+
+  private recordUnknownEvent(event: PiRpcEvent): void {
+    if (KNOWN_PI_RPC_EVENT_TYPES.has(event.type)) return
+    if (this.unknownEventTypes.has(event.type)) return
+
+    this.unknownEventTypes.add(event.type)
+    console.warn(`[Pi Agent] 未识别 Pi RPC 事件，已跳过: ${event.type}`)
+  }
 
   async *query(input: AgentQueryInput): AsyncIterable<SDKMessage> {
     if (!isPiAgentEnabled()) {
@@ -342,6 +361,8 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           yield createSuccessResultMessage(input)
           return
         }
+
+        this.recordUnknownEvent(event)
       }
 
       const processResult = await piProcess.done
