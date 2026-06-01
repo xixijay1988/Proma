@@ -262,6 +262,100 @@ describe('PiAgentAdapter', () => {
     expect(result.resultSubtype).toBe('success')
   })
 
+  test('Given Pi thinking delta and message end When query runs Then preserves final thinking block without warning', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const warnings = []
+      const originalWarn = console.warn
+      console.warn = (...args) => {
+        warnings.push(args.map((arg) => String(arg)).join(' '))
+      }
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: () => {},
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield {
+              type: 'message_update',
+              assistantMessageEvent: { type: 'thinking_delta', delta: '先分析' },
+            }
+            yield {
+              type: 'message_end',
+              message: {
+                role: 'assistant',
+                content: [
+                  { type: 'thinking', thinking: '先分析' },
+                  { type: 'text', text: '最终回答' },
+                ],
+                stopReason: 'stop',
+              },
+            }
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const messages = []
+
+      for await (const message of adapter.query({
+        sessionId: 'session-pi-thinking',
+        prompt: 'hello',
+        model: 'deepseek-v4-flash',
+      })) {
+        messages.push(message)
+      }
+
+      console.warn = originalWarn
+      console.log(JSON.stringify({
+        warnings,
+        messageTypes: messages.map((message) => message.type),
+        assistantBlocks: messages
+          .filter((message) => message.type === 'assistant')
+          .map((message) => message.message.content),
+        transientFlags: messages
+          .filter((message) => message.type === 'assistant')
+          .map((message) => message._promaTransient === true),
+        thinkingDeltaFlags: messages
+          .filter((message) => message.type === 'assistant')
+          .map((message) => message._promaThinkingDelta === true),
+        resultSubtype: messages.at(-1)?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('assistantBlocks'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      warnings?: string[]
+      messageTypes?: string[]
+      assistantBlocks?: Array<Array<{ type?: string; thinking?: string; text?: string }>>
+      transientFlags?: boolean[]
+      thinkingDeltaFlags?: boolean[]
+      resultSubtype?: string
+    }
+
+    expect(result.messageTypes).toEqual(['assistant', 'assistant', 'result'])
+    expect(result.assistantBlocks?.[0]).toEqual([{ type: 'thinking', thinking: '先分析' }])
+    expect(result.assistantBlocks?.[1]).toEqual([
+      { type: 'thinking', thinking: '先分析' },
+      { type: 'text', text: '最终回答' },
+    ])
+    expect(result.transientFlags).toEqual([true, false])
+    expect(result.thinkingDeltaFlags).toEqual([true, false])
+    expect(result.resultSubtype).toBe('success')
+    expect(result.warnings).toEqual([])
+  })
+
   test('Given extension confirm request When permission handler allows Then writes extension response', () => {
     const output = runPiAdapterScript(`
       import { mock } from 'bun:test'
@@ -479,6 +573,78 @@ describe('PiAgentAdapter', () => {
     expect(result.warnings?.[0]).toContain('future_pi_event')
   })
 
+  test('Given known Pi lifecycle events When query runs Then skips them without unknown diagnostics', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const warnings = []
+      const originalWarn = console.warn
+      console.warn = (...args) => {
+        warnings.push(args.map((arg) => String(arg)).join(' '))
+      }
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: () => {},
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield { type: 'agent_start' }
+            yield { type: 'turn_start' }
+            yield { type: 'message_start', message: { role: 'assistant', content: [] } }
+            yield {
+              type: 'tool_execution_update',
+              toolCallId: 'call-1',
+              toolName: 'bash',
+              args: { command: 'pwd' },
+              partialResult: 'running',
+            }
+            yield { type: 'turn_end', message: { role: 'assistant', content: [] }, toolResults: [] }
+            yield { type: 'queue_update', steering: [], followUp: [] }
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const messages = []
+
+      for await (const message of adapter.query({
+        sessionId: 'session-pi-known-lifecycle-events',
+        prompt: 'hello',
+        model: 'deepseek-v4-flash',
+      })) {
+        messages.push(message)
+      }
+
+      console.warn = originalWarn
+      console.log(JSON.stringify({
+        warnings,
+        messageTypes: messages.map((message) => message.type),
+        resultSubtype: messages.at(-1)?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('warnings'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      warnings?: string[]
+      messageTypes?: string[]
+      resultSubtype?: string
+    }
+
+    expect(result.messageTypes).toEqual(['result'])
+    expect(result.resultSubtype).toBe('success')
+    expect(result.warnings).toEqual([])
+  })
+
   test('Given unknown Pi message update child event When query runs Then logs diagnostic and continues', () => {
     const output = runPiAdapterScript(`
       import { mock } from 'bun:test'
@@ -505,8 +671,8 @@ describe('PiAgentAdapter', () => {
             yield {
               type: 'message_update',
               assistantMessageEvent: {
-                type: 'thinking_delta',
-                delta: 'future thinking stream',
+                type: 'future_delta',
+                delta: 'future stream',
               },
             }
             yield { type: 'agent_end', messages: [] }
@@ -544,7 +710,7 @@ describe('PiAgentAdapter', () => {
     expect(result.messageTypes).toEqual(['result'])
     expect(result.resultSubtype).toBe('success')
     expect(result.warnings?.[0]).toContain('未识别 Pi message_update 子事件')
-    expect(result.warnings?.[0]).toContain('thinking_delta')
+    expect(result.warnings?.[0]).toContain('future_delta')
   })
 
   test('Given malformed Pi tool event When query runs Then logs diagnostic and continues', () => {

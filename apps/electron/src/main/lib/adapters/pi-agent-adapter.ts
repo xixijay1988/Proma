@@ -1,27 +1,50 @@
 import type {
   AgentProviderAdapter,
   AgentQueryInput,
+  SDKContentBlock,
   SDKMessage,
   AgentRuntimeExtensionUiRequest,
   AgentRuntimeExtensionUiResponse,
 } from '@proma/shared'
-import { convertPiTextDelta, convertPiToolStart } from './pi-event-converter'
+import { convertPiTextDelta, convertPiThinkingDelta, convertPiToolStart } from './pi-event-converter'
 import { startPiRpcSession, type PiRpcEvent, type StartedPiRpcSession } from './pi-process'
 
 const PI_UNSUPPORTED_MESSAGE = 'Pi 进程集成尚未在此构建中实现或启用。'
 const PI_RPC_TERMINATED_MESSAGE = 'Pi RPC 会话在完成前结束。'
 const KNOWN_PI_RPC_EVENT_TYPES = new Set([
+  'agent_start',
   'agent_end',
+  'auto_retry_end',
+  'auto_retry_start',
+  'compaction_end',
+  'compaction_start',
   'extension_ui_request',
+  'message_start',
   'message_end',
   'message_update',
   'protocol_error',
+  'queue_update',
   'response',
+  'session',
   'tool_execution_end',
   'tool_execution_start',
+  'tool_execution_update',
+  'turn_end',
+  'turn_start',
 ])
 const KNOWN_PI_MESSAGE_UPDATE_EVENT_TYPES = new Set([
+  'done',
+  'error',
+  'start',
+  'text_end',
   'text_delta',
+  'text_start',
+  'thinking_delta',
+  'thinking_end',
+  'thinking_start',
+  'toolcall_delta',
+  'toolcall_end',
+  'toolcall_start',
 ])
 
 function isPiAgentEnabled(): boolean {
@@ -69,6 +92,20 @@ function createTransientTextDeltaMessage(input: AgentQueryInput, delta: string):
     ...message,
     _promaTransient: true,
     _promaTextDelta: true,
+  } as unknown as SDKMessage
+}
+
+function createTransientThinkingDeltaMessage(input: AgentQueryInput, delta: string): SDKMessage {
+  const message = convertPiThinkingDelta({
+    sessionId: input.sessionId,
+    delta,
+    model: input.model,
+  }) as SDKMessage
+
+  return {
+    ...message,
+    _promaTransient: true,
+    _promaThinkingDelta: true,
   } as unknown as SDKMessage
 }
 
@@ -175,35 +212,47 @@ function getAgentEndFailureMessage(event: PiRpcEvent): string | null {
   return null
 }
 
-function extractAssistantTextFromPiMessage(message: Record<string, unknown>): string {
-  if (!Array.isArray(message.content)) return ''
+function extractAssistantContentFromPiMessage(message: Record<string, unknown>): SDKContentBlock[] {
+  if (!Array.isArray(message.content)) return []
 
-  const parts: string[] = []
+  const blocks: SDKContentBlock[] = []
   for (const block of message.content) {
     const blockRecord = asRecord(block)
-    if (blockRecord?.type !== 'text') continue
+    if (!blockRecord) continue
 
-    const text = getString(blockRecord, 'text')
-    if (text) parts.push(text)
+    if (blockRecord.type === 'thinking') {
+      const thinking = getString(blockRecord, 'thinking')
+      if (thinking) blocks.push({ type: 'thinking', thinking })
+      continue
+    }
+
+    if (blockRecord.type === 'text') {
+      const text = getString(blockRecord, 'text')
+      if (text) blocks.push({ type: 'text', text })
+    }
   }
 
-  return parts.join('')
+  return blocks
 }
 
-function createFinalAssistantTextMessage(input: AgentQueryInput, event: PiRpcEvent): SDKMessage | null {
+function createFinalAssistantMessage(input: AgentQueryInput, event: PiRpcEvent): SDKMessage | null {
   if (event.type !== 'message_end') return null
 
   const message = asRecord(event.message)
   if (message?.role !== 'assistant') return null
 
-  const text = extractAssistantTextFromPiMessage(message)
-  if (!text) return null
+  const content = extractAssistantContentFromPiMessage(message)
+  if (content.length === 0) return null
 
-  return convertPiTextDelta({
-    sessionId: input.sessionId,
-    delta: text,
-    model: input.model,
-  })
+  return {
+    type: 'assistant',
+    message: {
+      content,
+      ...(input.model ? { model: input.model } : {}),
+    },
+    parent_tool_use_id: null,
+    session_id: input.sessionId,
+  }
 }
 
 function isExtensionUiDialogMethod(method: string): boolean {
@@ -234,6 +283,11 @@ function convertPiRpcEvent(input: AgentQueryInput, event: PiRpcEvent): SDKMessag
       const delta = getString(assistantMessageEvent, 'delta')
       if (!delta) return []
       return [createTransientTextDeltaMessage(input, delta)]
+    }
+    if (assistantMessageEvent?.type === 'thinking_delta') {
+      const delta = getString(assistantMessageEvent, 'delta')
+      if (!delta) return []
+      return [createTransientThinkingDeltaMessage(input, delta)]
     }
   }
 
@@ -385,7 +439,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           yield message
         }
 
-        const finalAssistantMessage = createFinalAssistantTextMessage(input, event)
+        const finalAssistantMessage = createFinalAssistantMessage(input, event)
         if (finalAssistantMessage) {
           yield finalAssistantMessage
         }

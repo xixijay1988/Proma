@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { convertPiTextDelta, convertPiToolStart } from './pi-event-converter'
+import { convertPiTextDelta, convertPiThinkingDelta, convertPiToolStart } from './pi-event-converter'
 
 describe('pi event converter', () => {
   test('Given pi text delta When converted Then returns assistant SDK message', () => {
@@ -32,5 +32,15 @@ describe('pi event converter', () => {
       name: 'bash',
       input: { command: 'pwd' },
     })
+  })
+
+  test('Given pi thinking delta When converted Then returns assistant thinking SDK message', () => {
+    const msg = convertPiThinkingDelta({ sessionId: 's1', delta: '分析路径', model: 'model-c' })
+
+    expect(msg.type).toBe('assistant')
+    expect(msg.session_id).toBe('s1')
+    expect(msg.parent_tool_use_id).toBeNull()
+    expect(msg.message.model).toBe('model-c')
+    expect(msg.message.content[0]).toEqual({ type: 'thinking', thinking: '分析路径' })
   })
 })

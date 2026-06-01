@@ -7,6 +7,13 @@ export interface PiTextDeltaInput {
   parentToolUseId?: string | null
 }
 
+export interface PiThinkingDeltaInput {
+  sessionId: string
+  delta: string
+  model?: string
+  parentToolUseId?: string | null
+}
+
 export interface PiToolStartInput {
   sessionId: string
   toolUseId: string
@@ -21,6 +28,18 @@ export function convertPiTextDelta(input: PiTextDeltaInput): SDKAssistantMessage
     type: 'assistant',
     message: {
       content: [{ type: 'text', text: input.delta }],
+      ...(input.model ? { model: input.model } : {}),
+    },
+    parent_tool_use_id: input.parentToolUseId ?? null,
+    session_id: input.sessionId,
+  }
+}
+
+export function convertPiThinkingDelta(input: PiThinkingDeltaInput): SDKAssistantMessage {
+  return {
+    type: 'assistant',
+    message: {
+      content: [{ type: 'thinking', thinking: input.delta }],
       ...(input.model ? { model: input.model } : {}),
     },
     parent_tool_use_id: input.parentToolUseId ?? null,

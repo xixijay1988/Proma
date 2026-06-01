@@ -119,9 +119,24 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `tool_execution_start` / `tool_execution_end` 缺少关键字段时记录 warning，并跳过该畸形工具事件。
   - 子事件和畸形事件的 warning 都会按类型去重，避免流式场景刷屏。
 - 新增 BDD 测试覆盖：
-  - 未知 `message_update` 子事件 `thinking_delta` 不打断会话。
+  - 未知 `message_update` 子事件不打断会话（后续已将 `thinking_delta` 升级为已知事件，当前用 `future_delta` 覆盖未知分支）。
   - 缺少 `toolName` 的 `tool_execution_start` 不打断会话。
 - 目的：真实 Pi RPC 协议扩展或异常输出时，Proma 不静默丢信息，也不因为非关键事件让会话失败。
+
+## 2026-06-01 Phase F thinking 与生命周期事件补齐
+
+- `thinking_delta` 已按 Pi 官方 RPC 协议升级为已知子事件：
+  - 流式 `thinking_delta` 转换为 transient `thinking` SDK block，不进入历史持久化。
+  - `message_end` 的最终 assistant content 会保留 `thinking` 与 `text` block，刷新历史后仍能看到完整思考块。
+  - 编排层测试确认 transient text/thinking delta 不写入 JSONL，只持久化最终 assistant content。
+- 扩展已知 Pi 顶层事件集合，正常生命周期事件不再误报未知：
+  - `agent_start` / `turn_start` / `message_start` / `turn_end`
+  - `tool_execution_update`
+  - `queue_update` / compaction / auto-retry 等会话事件
+- 新增/更新 BDD 测试覆盖：
+  - `thinking_delta` 不再产生 warning，并保留最终 thinking block。
+  - 文档内已知但当前不需要渲染的生命周期事件会安静跳过。
+  - 未知子事件测试改为 `future_delta`，继续保留协议扩展诊断护栏。
 
 ## 多端接力约定
 

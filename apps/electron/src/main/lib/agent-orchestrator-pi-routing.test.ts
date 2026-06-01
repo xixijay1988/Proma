@@ -293,7 +293,7 @@ describe('AgentOrchestrator pi routing', () => {
     expect(result.prompt).toContain('你背后是什么 Agent SDK？')
   })
 
-  test('Given pi transient text deltas When run completes Then persists only final assistant text', () => {
+  test('Given pi transient deltas When run completes Then persists only final assistant content', () => {
     const output = runOrchestratorScript(`
       import { mock } from 'bun:test'
 
@@ -332,7 +332,20 @@ describe('AgentOrchestrator pi routing', () => {
           }
           yield {
             type: 'assistant',
-            message: { content: [{ type: 'text', text: '你好' }] },
+            message: { content: [{ type: 'thinking', thinking: '分析' }] },
+            parent_tool_use_id: null,
+            session_id: input.sessionId,
+            _promaTransient: true,
+            _promaThinkingDelta: true,
+          }
+          yield {
+            type: 'assistant',
+            message: {
+              content: [
+                { type: 'thinking', thinking: '分析' },
+                { type: 'text', text: '你好' },
+              ],
+            },
             parent_tool_use_id: null,
             session_id: input.sessionId,
           }
@@ -369,9 +382,15 @@ describe('AgentOrchestrator pi routing', () => {
         .flatMap((message) => message.message.content)
         .filter((block) => block.type === 'text')
         .map((block) => block.text)
+      const assistantThinking = messages
+        .filter((message) => message.type === 'assistant')
+        .flatMap((message) => message.message.content)
+        .filter((block) => block.type === 'thinking')
+        .map((block) => block.thinking)
 
       console.log(JSON.stringify({
         assistantTexts,
+        assistantThinking,
         persistedCount: messages.length,
         hasTransient: messages.some((message) => message._promaTransient === true),
       }))
@@ -380,11 +399,13 @@ describe('AgentOrchestrator pi routing', () => {
     const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('assistantTexts'))
     const result = JSON.parse(jsonLine ?? '{}') as {
       assistantTexts?: string[]
+      assistantThinking?: string[]
       persistedCount?: number
       hasTransient?: boolean
     }
 
     expect(result.assistantTexts).toEqual(['你好'])
+    expect(result.assistantThinking).toEqual(['分析'])
     expect(result.persistedCount).toBe(3)
     expect(result.hasTransient).toBe(false)
   })
