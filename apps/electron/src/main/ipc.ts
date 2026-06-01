@@ -712,7 +712,7 @@ function assertAgentSessionForkSupported(sessionId: string): void {
   const session = getAgentSessionMeta(sessionId)
   const engine = resolveExistingSessionAgentEngine({ session })
   if (engine === 'pi') {
-    throw new Error('pi experimental 暂不支持会话分叉。请在 Claude SDK 工作区中使用该功能。')
+    throw new Error('Pi Agent RPC experimental 暂不支持会话分叉。请在 Claude SDK 工作区中使用该功能。')
   }
 }
 

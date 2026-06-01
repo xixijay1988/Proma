@@ -3,7 +3,7 @@
 ## 当前分支与提交
 
 - 分支：`codex/pi-agent-engine-phase-c`
-- 最新功能提交：`b0271cd feat(electron): integrate Pi Agent RPC runtime`
+- 最新提交：请以 `git log -1 --oneline` 为准。
 - 远端：`origin/codex/pi-agent-engine-phase-c`
 
 ## 项目目标对齐
@@ -169,6 +169,22 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - 重复 progress 只保留最新累计输出。
   - final tool_result 替换 transient progress。
   - 已知 lifecycle 测试承认 `tool_execution_update` 现在是可渲染进度事件，同时仍不产生未知 warning。
+
+## 2026-06-01 Phase G3/G4 可用性与打包验证
+
+- 复核开发态真实 Pi 会话记录：
+  - dev 配置目录 `~/.proma-dev` 的 Pi 会话 `c336bfd4-83ac-4249-9dfc-64edfa240be9` 已通过真实 UI 路径继续对话。
+  - 持久化历史包含 `thinking`、`text`、`tool_use`、`tool_result` 与最终 `result success`。
+  - Pi 原生日志确认 provider/model 为 `deepseek` / `deepseek-v4-flash`，且 prompt 内包含 Proma runtime identity。
+  - 工具链覆盖 `bash`、`read`、`write`、`edit`，并最终清理测试文件。
+- 打包验证：
+  - `CSC_IDENTITY_AUTO_DISCOVERY=false bun run dist:fast` 通过，仅保留既有 Vite chunk-size warning。
+  - 当前本地产物：`apps/electron/out/Proma-0.10.33-arm64.dmg`。
+  - 产物验证通过：`out/mac-arm64/Proma.app/Contents/Resources/app.asar.unpacked/node_modules/@earendil-works/pi-coding-agent/dist/cli.js` 存在。
+  - Claude SDK native binary 同样在 unpacked node_modules 中存在，未被 Pi 打包配置破坏。
+  - 使用打包后的 `Proma.app` 以 `ELECTRON_RUN_AS_NODE=1` 执行 Pi CLI `--version`，返回 `0.76.0`。
+- UI 文案继续收敛：
+  - 分叉、回退等暂不支持提示统一为 `Pi Agent RPC experimental`，避免出现旧的 `pi experimental` 低信息密度称呼。
 
 ## 多端接力约定
 

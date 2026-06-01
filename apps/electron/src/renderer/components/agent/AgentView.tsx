@@ -1644,7 +1644,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   /** 分叉会话：从指定消息处创建新会话并自动切换 */
   const handleFork = React.useCallback(async (upToMessageUuid: string): Promise<void> => {
     if (isPiAgentEngine) {
-      toast.info('pi experimental 暂不支持会话分叉。请在 Claude SDK 工作区中使用该功能。')
+      toast.info('Pi Agent RPC experimental 暂不支持会话分叉。请在 Claude SDK 工作区中使用该功能。')
       return
     }
 
@@ -1680,7 +1680,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
   const handleRewindRequest = React.useCallback((assistantMessageUuid: string): void => {
     if (isPiAgentEngine) {
-      toast.info('pi experimental 暂不支持文件快照回退。')
+      toast.info('Pi Agent RPC experimental 暂不支持文件快照回退。')
       return
     }
     setRewindTargetUuid(assistantMessageUuid)
@@ -1690,7 +1690,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     if (!rewindTargetUuid) return
     if (isPiAgentEngine) {
       setRewindTargetUuid(null)
-      toast.info('pi experimental 暂不支持文件快照回退。')
+      toast.info('Pi Agent RPC experimental 暂不支持文件快照回退。')
       return
     }
     const targetUuid = rewindTargetUuid

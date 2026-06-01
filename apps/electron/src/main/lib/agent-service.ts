@@ -358,7 +358,7 @@ export async function rewindAgentSession(
 ): Promise<import('@proma/shared').RewindSessionResult> {
   const engine = resolveEngineForSession(sessionId)
   if (engine === 'pi') {
-    throw new Error('pi experimental 暂不支持文件快照回退。')
+    throw new Error('Pi Agent RPC experimental 暂不支持文件快照回退。')
   }
   return getOrchestrator(engine).rewindSession(sessionId, assistantMessageUuid)
 }
