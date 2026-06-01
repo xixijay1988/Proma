@@ -138,6 +138,23 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - 文档内已知但当前不需要渲染的生命周期事件会安静跳过。
   - 未知子事件测试改为 `future_delta`，继续保留协议扩展诊断护栏。
 
+## 2026-06-01 Phase G1 流式 thinking 即时展示
+
+- Pi transient text/thinking delta 现在会进入前端实时 SDKMessage 渲染路径：
+  - 运行中即可显示 thinking block，不必等 `message_end` 后刷新历史。
+  - text delta 也走同一路径，避免有 thinking 时旧 fallback 文本气泡被抑制导致正文不可见。
+  - 最终 assistant content 到达时，会移除同一会话里的 transient text/thinking delta，用最终 `message_end` 内容替换。
+- 新增纯函数 helper：`apps/electron/src/renderer/lib/agent-live-messages.ts`
+  - 决定哪些 transient 消息可进入 liveMessages。
+  - 处理最终 assistant 替换 transient delta。
+  - 保留工具调用先到、最终 message_end 后到时的流式内容可见性。
+- Renderer 现在会合并相邻 `thinking` block，避免 Pi thinking token 级碎片化。
+- 新增 BDD 测试覆盖：
+  - transient text/thinking 可进入实时消息，普通 transient 仍跳过。
+  - final assistant 到达时替换 transient delta。
+  - tool_use 先到时不会提前清除正在显示的 thinking。
+  - 相邻 Pi thinking delta block 会合并成单个 thinking block。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

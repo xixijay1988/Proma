@@ -161,4 +161,20 @@ describe('Agent 过程块折叠分组', () => {
       text('后续文本'),
     ])
   })
+
+  test('given adjacent Pi thinking delta blocks when normalizing then merges them into one thinking block', () => {
+    const blocks = mergeAdjacentTextBlocksForTest([
+      thinking('先'),
+      thinking('分析'),
+      text('回答'),
+      thinking('另一个'),
+      thinking('思路'),
+    ])
+
+    expect(blocks).toEqual([
+      thinking('先分析'),
+      text('回答'),
+      thinking('另一个思路'),
+    ])
+  })
 })

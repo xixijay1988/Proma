@@ -58,6 +58,7 @@ import type { NotificationSoundType } from '@/types/settings'
 import { toast } from 'sonner'
 import type { AgentStreamEvent, AgentStreamCompletePayload, AgentEvent, AgentStreamPayload, SDKAssistantMessage, SDKUserMessage, SDKSystemMessage, SDKContentBlock, SDKUserContentBlock, PromaEvent, AgentSessionMeta } from '@proma/shared'
 import { buildExternalAgentRunActivation } from '@/lib/external-agent-run'
+import { appendLiveAgentMessage, shouldStoreLiveAgentMessage } from '@/lib/agent-live-messages'
 
 /** 触发右侧文件浏览器自动定位的写入类工具集合 */
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Update'])
@@ -584,9 +585,7 @@ export function useGlobalAgentListeners(): void {
           const msgRecord = payload.message as Record<string, unknown>
           // prompt_suggestion 不是对话转录消息，不能进入 liveMessages（会被错误渲染到最后一条助手消息中）
           // 它通过下方 legacyEvents 分支写入 agentPromptSuggestionsAtom，显示在输入框上方
-          if (msgRecord.type === 'prompt_suggestion') {
-            // 跳过写入 liveMessages
-          } else if (!msgRecord.isReplay && msgRecord._promaTransient !== true) {
+          if (shouldStoreLiveAgentMessage(payload.message)) {
             // 为实时消息补充 _createdAt 时间戳（与持久化时的逻辑一致），
             // 避免 AssistantTurnRenderer 因缺少时间戳导致 header 时间消失
             if (typeof msgRecord._createdAt !== 'number') {
@@ -603,14 +602,14 @@ export function useGlobalAgentListeners(): void {
             store.set(liveMessagesMapAtom, (prev) => {
               const map = new Map(prev)
               const current = map.get(sessionId) ?? []
+              const nextMessages = appendLiveAgentMessage(current, payload.message)
 
               // UUID 去重：队列消息已被乐观注入，SDK 再次推送时跳过
-              const incomingUuid = msgRecord.uuid as string | undefined
-              if (incomingUuid && current.some((m) => (m as Record<string, unknown>).uuid === incomingUuid)) {
+              if (nextMessages === current) {
                 return prev
               }
 
-              map.set(sessionId, [...current, payload.message])
+              map.set(sessionId, nextMessages)
               return map
             })
           }

@@ -492,7 +492,7 @@ export function buildHistoricalTaskSubjects(allMessages: SDKMessage[]): Map<stri
 
 // ===== AssistantTurnRenderer — 渲染一个完整的 assistant turn =====
 
-function mergeAdjacentTextBlocks(blocks: SDKContentBlock[]): SDKContentBlock[] {
+function mergeAdjacentStreamingBlocks(blocks: SDKContentBlock[]): SDKContentBlock[] {
   const merged: SDKContentBlock[] = []
 
   for (const block of blocks) {
@@ -510,6 +510,19 @@ function mergeAdjacentTextBlocks(blocks: SDKContentBlock[]): SDKContentBlock[] {
       continue
     }
 
+    if (
+      previous?.type === 'thinking'
+      && block.type === 'thinking'
+      && 'thinking' in previous
+      && 'thinking' in block
+    ) {
+      merged[merged.length - 1] = {
+        ...previous,
+        thinking: `${previous.thinking}${block.thinking}`,
+      } as SDKContentBlock
+      continue
+    }
+
     merged.push(block)
   }
 
@@ -517,7 +530,7 @@ function mergeAdjacentTextBlocks(blocks: SDKContentBlock[]): SDKContentBlock[] {
 }
 
 export function mergeAdjacentTextBlocksForTest(blocks: SDKContentBlock[]): SDKContentBlock[] {
-  return mergeAdjacentTextBlocks(blocks)
+  return mergeAdjacentStreamingBlocks(blocks)
 }
 
 export interface AssistantTurnRendererProps {
@@ -607,7 +620,7 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
       rawTopLevelBlocks.push(eb.block)
     }
   }
-  const topLevelBlocks = mergeAdjacentTextBlocks(rawTopLevelBlocks)
+  const topLevelBlocks = mergeAdjacentStreamingBlocks(rawTopLevelBlocks)
 
   // 检测是否有主要内容（text 块），用于决定 tool/thinking 是否 dimmed
   const hasTextContent = topLevelBlocks.some(
