@@ -186,6 +186,17 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
 - UI 文案继续收敛：
   - 分叉、回退等暂不支持提示统一为 `Pi Agent RPC experimental`，避免出现旧的 `pi experimental` 低信息密度称呼。
 
+## 2026-06-01 Phase G5 首轮自动标题
+
+- Agent 会话标题生成从 Claude SDK 专属路径提升为 Agent 编排通用能力：
+  - Claude SDK 会话在首条用户消息持久化后立即尝试生成标题，`onSessionId` 回调只保留为去重兜底。
+  - Pi Agent RPC 会话现在同样在首条用户消息持久化后触发标题生成，并通过既有 `TITLE_UPDATED` 事件同步侧边栏和 Tab。
+  - 默认标题判断兼容 `新 Agent 会话`、`新会话`、`未命名会话`，避免旧会话默认标题漏掉。
+- BDD 覆盖：
+  - 新建 Pi 会话发送首条消息后，会基于第一条用户消息生成标题。
+  - 会话索引中的标题与 `onTitleUpdated` 回调标题保持一致。
+  - 如果用户在标题生成返回前手动重命名，会保留手动标题，不被自动标题覆盖。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

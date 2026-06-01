@@ -496,9 +496,19 @@ const MAX_TITLE_LENGTH = 20
 
 /** 默认会话标题（用于判断是否需要自动生成） */
 const DEFAULT_SESSION_TITLE = '新 Agent 会话'
+const LEGACY_DEFAULT_SESSION_TITLES = new Set([
+  DEFAULT_SESSION_TITLE,
+  '新会话',
+  '未命名会话',
+])
 
 /** 默认模型 ID */
 const DEFAULT_MODEL_ID = 'claude-sonnet-4-6'
+
+function isDefaultAgentSessionTitle(title: string | undefined): boolean {
+  const normalized = title?.trim()
+  return !normalized || LEGACY_DEFAULT_SESSION_TITLES.has(normalized)
+}
 
 /**
  * 判断模型是否支持 1M context window beta（context-1m-2025-08-07）
@@ -701,6 +711,13 @@ export class AgentOrchestrator {
 
     const accumulatedMessages: SDKMessage[] = []
     let capturedResultSubtype: string | undefined
+    let titleGenerationStarted = false
+    const startTitleGeneration = (): void => {
+      if (titleGenerationStarted) return
+      titleGenerationStarted = true
+      this.autoGenerateTitle(sessionId, userMessage, input.channelId, modelId || DEFAULT_MODEL_ID, callbacks)
+        .catch((err) => console.error('[Agent 编排] Pi 标题生成未捕获异常:', err))
+    }
 
     try {
       const userSDKMsg: SDKMessage = {
@@ -713,6 +730,7 @@ export class AgentOrchestrator {
       } as unknown as SDKMessage
       appendSDKMessages(sessionId, [userSDKMsg])
       callbacks.onRunStarted?.({ startedAt: streamStartedAt })
+      startTitleGeneration()
 
       for await (const msg of this.adapter.query({
         sessionId,
@@ -1049,16 +1067,26 @@ export class AgentOrchestrator {
   private async autoGenerateTitle(
     sessionId: string,
     userMessage: string,
-    channelId: string,
-    modelId: string,
+    channelId: string | undefined,
+    modelId: string | undefined,
     callbacks: SessionCallbacks,
   ): Promise<void> {
     try {
       const meta = getAgentSessionMeta(sessionId)
-      if (!meta || meta.title !== DEFAULT_SESSION_TITLE) return
+      if (!meta || !isDefaultAgentSessionTitle(meta.title)) return
+      if (!channelId) {
+        console.warn('[Agent 编排] 自动标题生成跳过：缺少渠道 ID')
+        return
+      }
 
-      const title = await this.generateTitle({ userMessage, channelId, modelId })
+      const title = await this.generateTitle({
+        userMessage,
+        channelId,
+        modelId: modelId || DEFAULT_MODEL_ID,
+      })
       if (!title) return
+      const latestMeta = getAgentSessionMeta(sessionId)
+      if (!latestMeta || !isDefaultAgentSessionTitle(latestMeta.title)) return
 
       updateAgentSessionMeta(sessionId, { title })
       callbacks.onTitleUpdated(title)
@@ -1364,9 +1392,17 @@ export class AgentOrchestrator {
     const accumulatedMessages: SDKMessage[] = []
     let resolvedModel = modelId || DEFAULT_MODEL_ID
     let titleGenerationStarted = false
+    const startTitleGeneration = (): void => {
+      if (titleGenerationStarted) return
+      titleGenerationStarted = true
+      this.autoGenerateTitle(sessionId, userMessage, channelId, resolvedModel, callbacks)
+        .catch((err) => console.error('[Agent 编排] 标题生成未捕获异常:', err))
+    }
     let agentCwd: string | undefined
     let workspaceSlug: string | undefined
     let workspace: import('@proma/shared').AgentWorkspace | undefined
+
+    startTitleGeneration()
 
     try {
       // 8. 动态导入 SDK
@@ -1802,12 +1838,8 @@ export class AgentOrchestrator {
             }
           }
 
-          // SDK 初始化完成后立即触发标题生成，使多会话并发时用户能快速区分
-          if (!titleGenerationStarted) {
-            titleGenerationStarted = true
-            this.autoGenerateTitle(sessionId, userMessage, channelId, resolvedModel, callbacks)
-              .catch((err) => console.error('[Agent 编排] 标题生成未捕获异常:', err))
-          }
+          // 标题生成已在用户消息持久化后启动；这里保留兜底，避免异常路径漏触发。
+          startTitleGeneration()
         },
         onModelResolved: (model: string) => {
           resolvedModel = model

@@ -226,6 +226,256 @@ describe('AgentOrchestrator pi routing', () => {
     expect(result.piSessionDirEndsWith).toBe(true)
   })
 
+  test('Given new pi session When first message runs Then generates title from the first user message', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      mock.module('@proma/core', () => ({
+        getAdapter: () => ({
+          providerType: 'openai',
+          buildTitleRequest: ({ prompt }) => ({
+            url: 'https://title.example.test',
+            headers: {},
+            body: prompt,
+          }),
+          parseTitleResponse: () => 'unused',
+        }),
+        fetchTitle: async (request) => request.body.includes('帮我分析项目结构')
+          ? '项目结构分析'
+          : null,
+        normalizeAnthropicBaseUrlForSdk: (baseUrl) => baseUrl,
+      }))
+
+      mock.module('./channel-manager.ts', () => ({
+        getChannelById: (id) => id === 'title-channel'
+          ? {
+              id,
+              name: 'Title Channel',
+              provider: 'openai',
+              baseUrl: 'https://api.openai.com/v1',
+              apiKey: '',
+              models: [],
+              enabled: true,
+              createdAt: 0,
+              updatedAt: 0,
+            }
+          : undefined,
+        decryptApiKey: () => 'sk-title',
+        listChannels: () => [{
+          id: 'title-channel',
+          name: 'Title Channel',
+          provider: 'openai',
+          baseUrl: 'https://api.openai.com/v1',
+          apiKey: '',
+          models: [],
+          enabled: true,
+          createdAt: 0,
+          updatedAt: 0,
+        }],
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+      const { createAgentSession, getAgentSessionMeta } = await import('./agent-session-manager.ts')
+
+      class FakePiAdapter {
+        async *query(input) {
+          yield {
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: '可以，我来分析。' }] },
+            parent_tool_use_id: null,
+            session_id: input.sessionId,
+          }
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const session = createAgentSession(undefined, 'title-channel', undefined, 'pi')
+      const orchestrator = new AgentOrchestrator(new FakePiAdapter(), new AgentEventBus(), 'pi')
+      const titlePromise = new Promise((resolve) => {
+        globalThis.resolveTitle = resolve
+      })
+      let callbackTitle = null
+
+      await orchestrator.sendMessage({
+        sessionId: session.id,
+        userMessage: '帮我分析项目结构并给出改进建议',
+        channelId: 'title-channel',
+        modelId: 'gpt-4.1-mini',
+        startedAt: 987,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: (title) => {
+          callbackTitle = title
+          globalThis.resolveTitle(title)
+        },
+        onRunStarted: () => {},
+      })
+
+      const titleFromCallback = await Promise.race([
+        titlePromise,
+        new Promise((resolve) => setTimeout(() => resolve(null), 1000)),
+      ])
+      const updated = getAgentSessionMeta(session.id)
+
+      console.log(JSON.stringify({
+        initialTitle: session.title,
+        titleFromCallback,
+        callbackTitle,
+        storedTitle: updated?.title ?? null,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('storedTitle'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      initialTitle?: string
+      titleFromCallback?: string | null
+      callbackTitle?: string | null
+      storedTitle?: string | null
+    }
+
+    expect(result.initialTitle).toBe('新 Agent 会话')
+    expect(result.titleFromCallback).toBe('项目结构分析')
+    expect(result.callbackTitle).toBe('项目结构分析')
+    expect(result.storedTitle).toBe('项目结构分析')
+  })
+
+  test('Given user renames pi session while title is generating When title returns Then keeps manual title', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      mock.module('@proma/core', () => ({
+        getAdapter: () => ({
+          providerType: 'openai',
+          buildTitleRequest: ({ prompt }) => ({
+            url: 'https://title.example.test',
+            headers: {},
+            body: prompt,
+          }),
+          parseTitleResponse: () => 'unused',
+        }),
+        fetchTitle: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20))
+          return '自动标题'
+        },
+        normalizeAnthropicBaseUrlForSdk: (baseUrl) => baseUrl,
+      }))
+
+      mock.module('./channel-manager.ts', () => ({
+        getChannelById: (id) => id === 'title-channel'
+          ? {
+              id,
+              name: 'Title Channel',
+              provider: 'openai',
+              baseUrl: 'https://api.openai.com/v1',
+              apiKey: '',
+              models: [],
+              enabled: true,
+              createdAt: 0,
+              updatedAt: 0,
+            }
+          : undefined,
+        decryptApiKey: () => 'sk-title',
+        listChannels: () => [{
+          id: 'title-channel',
+          name: 'Title Channel',
+          provider: 'openai',
+          baseUrl: 'https://api.openai.com/v1',
+          apiKey: '',
+          models: [],
+          enabled: true,
+          createdAt: 0,
+          updatedAt: 0,
+        }],
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+      const { createAgentSession, getAgentSessionMeta, updateAgentSessionMeta } = await import('./agent-session-manager.ts')
+
+      class FakePiAdapter {
+        async *query(input) {
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const session = createAgentSession(undefined, 'title-channel', undefined, 'pi')
+      const orchestrator = new AgentOrchestrator(new FakePiAdapter(), new AgentEventBus(), 'pi')
+      let callbackTitle = null
+
+      await orchestrator.sendMessage({
+        sessionId: session.id,
+        userMessage: '帮我生成标题',
+        channelId: 'title-channel',
+        modelId: 'gpt-4.1-mini',
+        startedAt: 988,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: (title) => { callbackTitle = title },
+        onRunStarted: () => {
+          updateAgentSessionMeta(session.id, { title: '手动标题' })
+        },
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 80))
+      const updated = getAgentSessionMeta(session.id)
+
+      console.log(JSON.stringify({
+        callbackTitle,
+        storedTitle: updated?.title ?? null,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('storedTitle'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      callbackTitle?: string | null
+      storedTitle?: string | null
+    }
+
+    expect(result.callbackTitle).toBeNull()
+    expect(result.storedTitle).toBe('手动标题')
+  })
+
   test('Given pi engine When sending message Then prompt declares Pi runtime identity', () => {
     const output = runOrchestratorScript(`
       import { mock } from 'bun:test'
