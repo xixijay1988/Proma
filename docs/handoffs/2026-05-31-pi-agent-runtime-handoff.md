@@ -64,6 +64,27 @@ bun run --filter='@proma/electron' dev
 - 补齐 UI 上更明确的 runtime proof，例如过程区显示 `Pi Agent RPC`、session metadata 中展示 runtime engine。
 - 阶段性稳定后再考虑打包产物验证和发布分支整理。
 
+## 2026-06-01 Phase D 验证记录
+
+- 当前开发态配置目录是 `~/.proma-dev`，不是正式版 `~/.proma`。
+- dev 工作区 `默认工作区` 已设置 `agentEngine: "pi"`。
+- dev 会话 `c336bfd4-83ac-4249-9dfc-64edfa240be9` 已通过真实 UI 路径验证身份问题：
+  - 用户问题：`你是 Pi Agent 么`
+  - Proma 持久化 JSONL 只有 3 行：user / final assistant / success result。
+  - assistant 明确回答运行在 `Pi Agent RPC runtime`，底层是 `@earendil-works/pi-coding-agent` RPC 模式。
+  - Pi 原生 session 日志确认 provider 是 `deepseek`，model 是 `deepseek-v4-flash`，并包含 runtime identity 注入。
+- 使用一次性 Electron 验证脚本复用 dev DeepSeek 渠道做真实 Pi RPC 文件读写：
+  - sessionId：`pi-e2e-92abb563-c85d-4b3e-b59e-c37987cdebe7`
+  - cwd：`~/.proma-dev/agent-workspaces/default/pi-e2e-92abb563-c85d-4b3e-b59e-c37987cdebe7`
+  - Pi 成功调用 `write` 创建 `proma-pi-e2e.txt`，内容为 `PI_AGENT_E2E_OK`。
+  - Pi 随后调用 `read` 读回同一文件。
+  - Adapter 输出包含工具调用，result subtype 为 `success`，最终 assistant 文本确认读回成功。
+- Focused tests 重新验证：
+  - `bun test apps/electron/src/main/lib/adapters/pi-process.test.ts apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts apps/electron/src/main/lib/adapters/pi-runtime-config.test.ts apps/electron/src/renderer/components/agent/ProcessBlockGroup.test.ts`
+  - 结果：33 pass / 0 fail。
+
+Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、真实 RPC 工具读写、最终消息持久化都已通过最小验收。仍建议补一轮可视 UI 手工检查，重点看工具过程折叠、刷新历史后的显示和中断按钮。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。
