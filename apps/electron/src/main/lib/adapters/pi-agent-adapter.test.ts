@@ -175,8 +175,111 @@ describe('PiAgentAdapter', () => {
     expect(result.thirdToolResult).toEqual({
       type: 'tool_result',
       tool_use_id: 'call-1',
-      content: { content: [{ type: 'text', text: '/tmp/project' }] },
+      content: [{ type: 'text', text: '/tmp/project' }],
       is_error: false,
+    })
+    expect(result.resultSubtype).toBe('success')
+  })
+
+  test('Given Pi tool update When query runs Then emits transient tool result progress', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: () => {},
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield {
+              type: 'tool_execution_start',
+              toolCallId: 'call-progress',
+              toolName: 'bash',
+              args: { command: 'printf hello' },
+            }
+            yield {
+              type: 'tool_execution_update',
+              toolCallId: 'call-progress',
+              toolName: 'bash',
+              partialResult: { content: [{ type: 'text', text: 'hel' }] },
+            }
+            yield {
+              type: 'tool_execution_end',
+              toolCallId: 'call-progress',
+              toolName: 'bash',
+              result: { content: [{ type: 'text', text: 'hello' }] },
+              isError: false,
+            }
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const messages = []
+
+      for await (const message of adapter.query({
+        sessionId: 'session-pi-tool-progress',
+        prompt: 'hello',
+        model: 'deepseek-v4-flash',
+      })) {
+        messages.push(message)
+      }
+
+      const toolResults = messages
+        .filter((message) => message.type === 'user')
+        .map((message) => ({
+          block: message.message.content[0],
+          transient: message._promaTransient === true,
+          progress: message._promaToolProgress === true,
+        }))
+
+      console.log(JSON.stringify({
+        messageTypes: messages.map((message) => message.type),
+        toolResults,
+        resultSubtype: messages.at(-1)?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('toolResults'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      messageTypes?: string[]
+      toolResults?: Array<{
+        block?: { type?: string; tool_use_id?: string; content?: unknown; is_error?: boolean }
+        transient?: boolean
+        progress?: boolean
+      }>
+      resultSubtype?: string
+    }
+
+    expect(result.messageTypes).toEqual(['assistant', 'user', 'user', 'result'])
+    expect(result.toolResults?.[0]).toEqual({
+      block: {
+        type: 'tool_result',
+        tool_use_id: 'call-progress',
+        content: [{ type: 'text', text: 'hel' }],
+        is_error: false,
+      },
+      transient: true,
+      progress: true,
+    })
+    expect(result.toolResults?.[1]).toEqual({
+      block: {
+        type: 'tool_result',
+        tool_use_id: 'call-progress',
+        content: [{ type: 'text', text: 'hello' }],
+        is_error: false,
+      },
+      transient: false,
+      progress: false,
     })
     expect(result.resultSubtype).toBe('success')
   })
@@ -640,7 +743,7 @@ describe('PiAgentAdapter', () => {
       resultSubtype?: string
     }
 
-    expect(result.messageTypes).toEqual(['result'])
+    expect(result.messageTypes).toEqual(['user', 'result'])
     expect(result.resultSubtype).toBe('success')
     expect(result.warnings).toEqual([])
   })

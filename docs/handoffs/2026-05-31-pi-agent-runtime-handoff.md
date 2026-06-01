@@ -155,6 +155,21 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - tool_use 先到时不会提前清除正在显示的 thinking。
   - 相邻 Pi thinking delta block 会合并成单个 thinking block。
 
+## 2026-06-01 Phase G2 工具进度实时展示
+
+- Pi `tool_execution_update` 现在会转换为 Proma transient `tool_result`：
+  - `partialResult` 按 Pi 文档视为累计输出，前端直接替换显示，不做 delta 拼接。
+  - 同一 `toolCallId` 的多次进度更新只保留最新一条，避免 liveMessages 膨胀。
+  - 最终 `tool_execution_end` 到达时，会移除 transient 进度结果并用最终工具结果替换。
+- Pi 工具结果内容已归一化：
+  - `{ content: [{ type: 'text', text: '...' }] }` 会转换为 SDK `tool_result.content` 的 text block 数组。
+  - 这样 Proma 现有 `ContentBlock` / `ToolResultRenderer` 可以直接展开显示 Pi 工具输出。
+- 新增/更新 BDD 测试覆盖：
+  - Pi tool update 会产出 transient progress tool_result。
+  - 重复 progress 只保留最新累计输出。
+  - final tool_result 替换 transient progress。
+  - 已知 lifecycle 测试承认 `tool_execution_update` 现在是可渲染进度事件，同时仍不产生未知 warning。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

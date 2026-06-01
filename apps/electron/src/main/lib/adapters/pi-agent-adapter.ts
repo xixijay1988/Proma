@@ -121,6 +121,13 @@ function createSuccessResultMessage(input: AgentQueryInput): SDKMessage {
   }
 }
 
+function normalizePiToolResultContent(value: unknown): unknown {
+  const record = asRecord(value)
+  if (!record) return value ?? null
+
+  return Array.isArray(record.content) ? record.content : value
+}
+
 function createToolResultMessage(input: AgentQueryInput, event: PiRpcEvent): SDKMessage | null {
   const toolUseId = getString(event, 'toolCallId')
   if (!toolUseId) return null
@@ -132,7 +139,7 @@ function createToolResultMessage(input: AgentQueryInput, event: PiRpcEvent): SDK
         {
           type: 'tool_result',
           tool_use_id: toolUseId,
-          content: event.result ?? null,
+          content: normalizePiToolResultContent(event.result),
           is_error: event.isError === true,
         },
       ],
@@ -140,6 +147,31 @@ function createToolResultMessage(input: AgentQueryInput, event: PiRpcEvent): SDK
     parent_tool_use_id: null,
     session_id: input.sessionId,
   }
+}
+
+function createTransientToolProgressMessage(input: AgentQueryInput, event: PiRpcEvent): SDKMessage | null {
+  if (event.type !== 'tool_execution_update') return null
+
+  const toolUseId = getString(event, 'toolCallId')
+  if (!toolUseId) return null
+
+  return {
+    type: 'user',
+    message: {
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          content: normalizePiToolResultContent(event.partialResult),
+          is_error: false,
+        },
+      ],
+    },
+    parent_tool_use_id: null,
+    session_id: input.sessionId,
+    _promaTransient: true,
+    _promaToolProgress: true,
+  } as unknown as SDKMessage
 }
 
 function formatPiProcessDiagnostics(processResult: Awaited<StartedPiRpcSession['done']>): string {
@@ -309,6 +341,11 @@ function convertPiRpcEvent(input: AgentQueryInput, event: PiRpcEvent): SDKMessag
   if (event.type === 'tool_execution_end') {
     const toolResultMessage = createToolResultMessage(input, event)
     return toolResultMessage ? [toolResultMessage] : []
+  }
+
+  if (event.type === 'tool_execution_update') {
+    const toolProgressMessage = createTransientToolProgressMessage(input, event)
+    return toolProgressMessage ? [toolProgressMessage] : []
   }
 
   return []

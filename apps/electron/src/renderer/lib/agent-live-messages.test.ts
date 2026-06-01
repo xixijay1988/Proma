@@ -29,10 +29,29 @@ const finalAssistant = (): SDKMessage => ({
   parent_tool_use_id: null,
 })
 
+const toolProgress = (text: string): SDKMessage => ({
+  type: 'user',
+  message: {
+    content: [{ type: 'tool_result', tool_use_id: 'call-1', content: [{ type: 'text', text }], is_error: false }],
+  },
+  parent_tool_use_id: null,
+  _promaTransient: true,
+  _promaToolProgress: true,
+} as SDKMessage)
+
+const finalToolResult = (text: string): SDKMessage => ({
+  type: 'user',
+  message: {
+    content: [{ type: 'tool_result', tool_use_id: 'call-1', content: [{ type: 'text', text }], is_error: false }],
+  },
+  parent_tool_use_id: null,
+})
+
 describe('Agent live messages', () => {
   test('Given Pi streaming deltas When deciding live storage Then keeps only renderable deltas', () => {
     expect(shouldStoreLiveAgentMessage(textDelta('你'))).toBe(true)
     expect(shouldStoreLiveAgentMessage(thinkingDelta('先'))).toBe(true)
+    expect(shouldStoreLiveAgentMessage(toolProgress('partial'))).toBe(true)
     expect(shouldStoreLiveAgentMessage({
       type: 'assistant',
       message: { content: [{ type: 'text', text: 'ignored' }] },
@@ -70,5 +89,20 @@ describe('Agent live messages', () => {
     expect(next).toHaveLength(2)
     expect((next[0] as Record<string, unknown>)._promaThinkingDelta).toBe(true)
     expect((next[1] as { message: { content: Array<{ type: string }> } }).message.content[0]?.type).toBe('tool_use')
+  })
+
+  test('Given repeated Pi tool progress When appending Then keeps only latest progress for the tool', () => {
+    const next = appendLiveAgentMessage([toolProgress('hel')], toolProgress('hello'))
+
+    expect(next).toHaveLength(1)
+    expect((next[0] as { message: { content: Array<{ content: Array<{ text: string }> }> } }).message.content[0]?.content[0]?.text).toBe('hello')
+  })
+
+  test('Given Pi final tool result When appending Then replaces transient progress for the tool', () => {
+    const next = appendLiveAgentMessage([toolProgress('hel')], finalToolResult('hello'))
+
+    expect(next).toHaveLength(1)
+    expect((next[0] as Record<string, unknown>)._promaToolProgress).toBeUndefined()
+    expect((next[0] as { message: { content: Array<{ content: Array<{ text: string }> }> } }).message.content[0]?.content[0]?.text).toBe('hello')
   })
 })
