@@ -20,6 +20,9 @@ const KNOWN_PI_RPC_EVENT_TYPES = new Set([
   'tool_execution_end',
   'tool_execution_start',
 ])
+const KNOWN_PI_MESSAGE_UPDATE_EVENT_TYPES = new Set([
+  'text_delta',
+])
 
 function isPiAgentEnabled(): boolean {
   return process.env.PROMA_PI_AGENT_ENABLED !== '0'
@@ -261,6 +264,8 @@ export class PiAgentAdapter implements AgentProviderAdapter {
   readonly name = 'pi' as const
   private readonly processes = new Map<string, StartedPiRpcSession>()
   private readonly unknownEventTypes = new Set<string>()
+  private readonly unknownChildEventTypes = new Set<string>()
+  private readonly malformedEventTypes = new Set<string>()
 
   private recordUnknownEvent(event: PiRpcEvent): void {
     if (KNOWN_PI_RPC_EVENT_TYPES.has(event.type)) return
@@ -268,6 +273,40 @@ export class PiAgentAdapter implements AgentProviderAdapter {
 
     this.unknownEventTypes.add(event.type)
     console.warn(`[Pi Agent] 未识别 Pi RPC 事件，已跳过: ${event.type}`)
+  }
+
+  private recordUnknownChildEvent(event: PiRpcEvent): void {
+    if (event.type !== 'message_update') return
+
+    const assistantMessageEvent = asRecord(event.assistantMessageEvent)
+    const eventType = assistantMessageEvent ? getString(assistantMessageEvent, 'type') : null
+    const childType = eventType ?? 'missing_type'
+    if (KNOWN_PI_MESSAGE_UPDATE_EVENT_TYPES.has(childType)) return
+
+    const key = `${event.type}:${childType}`
+    if (this.unknownChildEventTypes.has(key)) return
+
+    this.unknownChildEventTypes.add(key)
+    console.warn(`[Pi Agent] 未识别 Pi message_update 子事件，已跳过: ${childType}`)
+  }
+
+  private recordMalformedEvent(event: PiRpcEvent): void {
+    const missingFields: string[] = []
+
+    if (event.type === 'tool_execution_start') {
+      if (!getString(event, 'toolCallId')) missingFields.push('toolCallId')
+      if (!getString(event, 'toolName')) missingFields.push('toolName')
+    } else if (event.type === 'tool_execution_end') {
+      if (!getString(event, 'toolCallId')) missingFields.push('toolCallId')
+    }
+
+    if (missingFields.length === 0) return
+
+    const key = `${event.type}:${missingFields.join(',')}`
+    if (this.malformedEventTypes.has(key)) return
+
+    this.malformedEventTypes.add(key)
+    console.warn(`[Pi Agent] Pi ${event.type} 事件缺少字段，已跳过: ${missingFields.join(', ')}`)
   }
 
   async *query(input: AgentQueryInput): AsyncIterable<SDKMessage> {
@@ -340,6 +379,8 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           return
         }
 
+        this.recordMalformedEvent(event)
+
         for (const message of convertPiRpcEvent(input, event)) {
           yield message
         }
@@ -348,6 +389,8 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         if (finalAssistantMessage) {
           yield finalAssistantMessage
         }
+
+        this.recordUnknownChildEvent(event)
 
         if (event.type === 'agent_end') {
           const agentEndFailureMessage = getAgentEndFailureMessage(event)

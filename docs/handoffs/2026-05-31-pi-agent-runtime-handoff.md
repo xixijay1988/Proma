@@ -112,6 +112,17 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
 - 新增 BDD 测试覆盖：未知事件出现后仍能继续收到 `agent_end` 并返回 `success`。
 - 这一步是协议兼容性护栏，方便后续遇到 Pi 新事件类型时定位，而不是静默丢失上下文。
 
+## 2026-06-01 Phase F 协议硬化继续
+
+- `PiAgentAdapter` 继续扩展诊断护栏：
+  - 已知 `message_update` 中遇到未知 `assistantMessageEvent.type` 时记录 warning，并继续等待后续事件。
+  - `tool_execution_start` / `tool_execution_end` 缺少关键字段时记录 warning，并跳过该畸形工具事件。
+  - 子事件和畸形事件的 warning 都会按类型去重，避免流式场景刷屏。
+- 新增 BDD 测试覆盖：
+  - 未知 `message_update` 子事件 `thinking_delta` 不打断会话。
+  - 缺少 `toolName` 的 `tool_execution_start` 不打断会话。
+- 目的：真实 Pi RPC 协议扩展或异常输出时，Proma 不静默丢信息，也不因为非关键事件让会话失败。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。
