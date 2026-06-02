@@ -181,6 +181,603 @@ describe('PiAgentAdapter', () => {
     expect(result.resultSubtype).toBe('success')
   })
 
+  test('Given active Pi query When queued message is sent Then steers current RPC session', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+      let releaseAgentEnd
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => { sentCommands.push(command) },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            await waitForRelease
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const iterator = adapter.query({
+        sessionId: 'session-pi-queue',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })[Symbol.asyncIterator]()
+
+      const firstYield = iterator.next()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      await adapter.sendQueuedMessage('session-pi-queue', {
+        type: 'user',
+        message: { role: 'user', content: 'queued now' },
+        parent_tool_use_id: null,
+        priority: 'now',
+        uuid: 'queued-1',
+        session_id: 'session-pi-queue',
+      })
+
+      releaseAgentEnd()
+      const resultMessage = await firstYield
+
+      console.log(JSON.stringify({
+        sentCommands,
+        resultType: resultMessage.value?.type,
+        resultSubtype: resultMessage.value?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('sentCommands'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{ type?: string; message?: string }>
+      resultType?: string
+      resultSubtype?: string
+    }
+
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'steer'])
+    expect(result.sentCommands?.[1]).toMatchObject({ type: 'steer', message: 'queued now' })
+    expect(result.resultType).toBe('result')
+    expect(result.resultSubtype).toBe('success')
+  })
+
+  test('Given active Pi query When fork messages are requested Then returns Pi native fork candidates', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+      let releaseAgentEnd
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'get_fork_messages') {
+              queueMicrotask(() => releaseResponse({
+                type: 'response',
+                id: command.id,
+                command: 'get_fork_messages',
+                success: true,
+                data: {
+                  messages: [
+                    { id: 'entry-user-1', text: 'first user prompt' },
+                    { id: 'entry-user-2', text: 'second user prompt' },
+                  ],
+                },
+              }))
+            }
+          },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            const response = await waitForResponse
+            yield response
+            await waitForRelease
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      let releaseResponse
+      const waitForResponse = new Promise((resolve) => { releaseResponse = resolve })
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const iterator = adapter.query({
+        sessionId: 'session-pi-fork-messages',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })[Symbol.asyncIterator]()
+
+      const firstYield = iterator.next()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      const forkMessages = await adapter.getForkMessages('session-pi-fork-messages')
+      releaseAgentEnd()
+      const resultMessage = await firstYield
+
+      console.log(JSON.stringify({
+        sentCommands,
+        forkMessages,
+        resultType: resultMessage.value?.type,
+        resultSubtype: resultMessage.value?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('forkMessages'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{ type?: string; id?: string; message?: string }>
+      forkMessages?: Array<{ id?: string; text?: string }>
+      resultType?: string
+      resultSubtype?: string
+    }
+
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'get_fork_messages'])
+    expect(result.sentCommands?.[1]?.id).toStartWith('proma-get-fork-messages-session-pi-fork-messages-')
+    expect(result.forkMessages).toEqual([
+      { id: 'entry-user-1', text: 'first user prompt' },
+      { id: 'entry-user-2', text: 'second user prompt' },
+    ])
+    expect(result.resultType).toBe('result')
+    expect(result.resultSubtype).toBe('success')
+  })
+
+  test('Given active Pi query When native fork is requested Then sends fork command and returns selected text', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+      let releaseAgentEnd
+      let releaseResponse
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+      const waitForResponse = new Promise((resolve) => { releaseResponse = resolve })
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'fork') {
+              queueMicrotask(() => releaseResponse({
+                type: 'response',
+                id: command.id,
+                command: 'fork',
+                success: true,
+                data: {
+                  text: 'selected user prompt',
+                  cancelled: false,
+                  sessionId: 'pi-native-fork-id',
+                  sessionPath: '/tmp/pi-native-fork.jsonl',
+                },
+              }))
+            }
+          },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            const response = await waitForResponse
+            yield response
+            await waitForRelease
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const iterator = adapter.query({
+        sessionId: 'session-pi-native-fork',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })[Symbol.asyncIterator]()
+
+      const firstYield = iterator.next()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      const forkResult = await adapter.fork('session-pi-native-fork', 'entry-user-1')
+      releaseAgentEnd()
+      const resultMessage = await firstYield
+
+      console.log(JSON.stringify({
+        sentCommands,
+        forkResult,
+        resultType: resultMessage.value?.type,
+        resultSubtype: resultMessage.value?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('forkResult'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{ type?: string; id?: string; entryId?: string }>
+      forkResult?: { text?: string; cancelled?: boolean; sessionId?: string; sessionPath?: string }
+      resultType?: string
+      resultSubtype?: string
+    }
+
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'fork'])
+    expect(result.sentCommands?.[1]).toMatchObject({ type: 'fork', entryId: 'entry-user-1' })
+    expect(result.forkResult).toEqual({
+      text: 'selected user prompt',
+      cancelled: false,
+      sessionId: 'pi-native-fork-id',
+      sessionPath: '/tmp/pi-native-fork.jsonl',
+    })
+    expect(result.resultType).toBe('result')
+    expect(result.resultSubtype).toBe('success')
+  })
+
+  test('Given active Pi query When native clone is requested Then sends clone command', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+      let releaseAgentEnd
+      let releaseResponse
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+      const waitForResponse = new Promise((resolve) => { releaseResponse = resolve })
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'clone') {
+              queueMicrotask(() => releaseResponse({
+                type: 'response',
+                id: command.id,
+                command: 'clone',
+                success: true,
+                data: {
+                  cancelled: false,
+                  sessionId: 'pi-native-clone-id',
+                  sessionPath: '/tmp/pi-native-clone.jsonl',
+                },
+              }))
+            }
+          },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            const response = await waitForResponse
+            yield response
+            await waitForRelease
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const iterator = adapter.query({
+        sessionId: 'session-pi-native-clone',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })[Symbol.asyncIterator]()
+
+      const firstYield = iterator.next()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      const cloneResult = await adapter.clone('session-pi-native-clone')
+      releaseAgentEnd()
+      const resultMessage = await firstYield
+
+      console.log(JSON.stringify({
+        sentCommands,
+        cloneResult,
+        resultType: resultMessage.value?.type,
+        resultSubtype: resultMessage.value?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('cloneResult'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{ type?: string; id?: string }>
+      cloneResult?: { cancelled?: boolean; sessionId?: string; sessionPath?: string }
+      resultType?: string
+      resultSubtype?: string
+    }
+
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'clone'])
+    expect(result.sentCommands?.[1]?.id).toStartWith('proma-clone-session-pi-native-clone-')
+    expect(result.cloneResult).toEqual({
+      cancelled: false,
+      sessionId: 'pi-native-clone-id',
+      sessionPath: '/tmp/pi-native-clone.jsonl',
+    })
+    expect(result.resultType).toBe('result')
+    expect(result.resultSubtype).toBe('success')
+  })
+
+  test('Given active Pi query When native switch session is requested Then sends switch_session command', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+      let releaseAgentEnd
+      let releaseResponse
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+      const waitForResponse = new Promise((resolve) => { releaseResponse = resolve })
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'switch_session') {
+              queueMicrotask(() => releaseResponse({
+                type: 'response',
+                id: command.id,
+                command: 'switch_session',
+                success: true,
+                data: {
+                  cancelled: false,
+                },
+              }))
+            }
+          },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            const response = await waitForResponse
+            yield response
+            await waitForRelease
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const iterator = adapter.query({
+        sessionId: 'session-pi-native-switch',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })[Symbol.asyncIterator]()
+
+      const firstYield = iterator.next()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      const switchResult = await adapter.switchSession('session-pi-native-switch', '/tmp/pi-target-session.jsonl')
+      releaseAgentEnd()
+      const resultMessage = await firstYield
+
+      console.log(JSON.stringify({
+        sentCommands,
+        switchResult,
+        resultType: resultMessage.value?.type,
+        resultSubtype: resultMessage.value?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('switchResult'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{ type?: string; id?: string; sessionPath?: string }>
+      switchResult?: { cancelled?: boolean }
+      resultType?: string
+      resultSubtype?: string
+    }
+
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'switch_session'])
+    expect(result.sentCommands?.[1]).toMatchObject({
+      type: 'switch_session',
+      sessionPath: '/tmp/pi-target-session.jsonl',
+    })
+    expect(result.sentCommands?.[1]?.id).toStartWith('proma-switch-session-session-pi-native-switch-')
+    expect(result.switchResult).toEqual({ cancelled: false })
+    expect(result.resultType).toBe('result')
+    expect(result.resultSubtype).toBe('success')
+  })
+
+  test('Given active Pi query When runtime messages are requested Then sends get_messages command', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+      let releaseAgentEnd
+      let releaseResponse
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+      const waitForResponse = new Promise((resolve) => { releaseResponse = resolve })
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'get_messages') {
+              queueMicrotask(() => releaseResponse({
+                type: 'response',
+                id: command.id,
+                command: 'get_messages',
+                success: true,
+                data: {
+                  messages: [
+                    {
+                      type: 'user',
+                      session_id: 'session-pi-runtime-messages',
+                      message: { content: [{ type: 'text', text: 'hello from pi' }] },
+                    },
+                  ],
+                },
+              }))
+            }
+          },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            const response = await waitForResponse
+            yield response
+            await waitForRelease
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const iterator = adapter.query({
+        sessionId: 'session-pi-runtime-messages',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })[Symbol.asyncIterator]()
+
+      const firstYield = iterator.next()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      const messages = await adapter.getMessages('session-pi-runtime-messages')
+      releaseAgentEnd()
+      const resultMessage = await firstYield
+
+      console.log(JSON.stringify({
+        sentCommands,
+        messages,
+        resultType: resultMessage.value?.type,
+        resultSubtype: resultMessage.value?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('messages'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{ type?: string; id?: string }>
+      messages?: Array<{ type?: string; message?: { content?: Array<{ text?: string }> } }>
+      resultType?: string
+      resultSubtype?: string
+    }
+
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'get_messages'])
+    expect(result.sentCommands?.[1]?.id).toStartWith('proma-get-messages-session-pi-runtime-messages-')
+    expect(result.messages?.[0]?.type).toBe('user')
+    expect(result.messages?.[0]?.message?.content?.[0]?.text).toBe('hello from pi')
+    expect(result.resultType).toBe('result')
+    expect(result.resultSubtype).toBe('success')
+  })
+
+  test('Given Pi native command failure When fork messages are requested Then rejects with response error', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+      let releaseAgentEnd
+      let releaseResponse
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+      const waitForResponse = new Promise((resolve) => { releaseResponse = resolve })
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'get_fork_messages') {
+              queueMicrotask(() => releaseResponse({
+                type: 'response',
+                id: command.id,
+                command: 'get_fork_messages',
+                success: false,
+                error: 'Cannot read fork messages',
+              }))
+            }
+          },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            const response = await waitForResponse
+            yield response
+            await waitForRelease
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const iterator = adapter.query({
+        sessionId: 'session-pi-fork-failure',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })[Symbol.asyncIterator]()
+
+      const firstYield = iterator.next()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      let errorMessage = ''
+      try {
+        await adapter.getForkMessages('session-pi-fork-failure')
+      } catch (error) {
+        errorMessage = error instanceof Error ? error.message : String(error)
+      }
+
+      releaseAgentEnd()
+      const resultMessage = await firstYield
+
+      console.log(JSON.stringify({
+        sentCommands,
+        errorMessage,
+        resultType: resultMessage.value?.type,
+        resultSubtype: resultMessage.value?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('errorMessage'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{ type?: string }>
+      errorMessage?: string
+      resultType?: string
+      resultSubtype?: string
+    }
+
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'get_fork_messages'])
+    expect(result.errorMessage).toContain('Cannot read fork messages')
+    expect(result.resultType).toBe('result')
+    expect(result.resultSubtype).toBe('success')
+  })
+
   test('Given Pi tool update When query runs Then emits transient tool result progress', () => {
     const output = runPiAdapterScript(`
       import { mock } from 'bun:test'
@@ -208,6 +805,7 @@ describe('PiAgentAdapter', () => {
               type: 'tool_execution_update',
               toolCallId: 'call-progress',
               toolName: 'bash',
+              args: { command: 'printf hello' },
               partialResult: { content: [{ type: 'text', text: 'hel' }] },
             }
             yield {
@@ -238,6 +836,7 @@ describe('PiAgentAdapter', () => {
         .filter((message) => message.type === 'user')
         .map((message) => ({
           block: message.message.content[0],
+          toolUseResult: message.toolUseResult,
           transient: message._promaTransient === true,
           progress: message._promaToolProgress === true,
         }))
@@ -254,6 +853,7 @@ describe('PiAgentAdapter', () => {
       messageTypes?: string[]
       toolResults?: Array<{
         block?: { type?: string; tool_use_id?: string; content?: unknown; is_error?: boolean }
+        toolUseResult?: { toolName?: string; input?: Record<string, unknown>; content?: Array<{ type: string; text: string }>; isError?: boolean }
         transient?: boolean
         progress?: boolean
       }>
@@ -268,6 +868,12 @@ describe('PiAgentAdapter', () => {
         content: [{ type: 'text', text: 'hel' }],
         is_error: false,
       },
+      toolUseResult: {
+        toolName: 'bash',
+        input: { command: 'printf hello' },
+        content: [{ type: 'text', text: 'hel' }],
+        isError: false,
+      },
       transient: true,
       progress: true,
     })
@@ -278,9 +884,171 @@ describe('PiAgentAdapter', () => {
         content: [{ type: 'text', text: 'hello' }],
         is_error: false,
       },
+      toolUseResult: {
+        content: [{ type: 'text', text: 'hello' }],
+        isError: false,
+      },
       transient: false,
       progress: false,
     })
+    expect(result.resultSubtype).toBe('success')
+  })
+
+  test('Given Pi MCP tool result has image resource and structured content When query runs Then preserves display and structured payloads', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: () => {},
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield {
+              type: 'tool_execution_start',
+              toolCallId: 'mcp-call-1',
+              toolName: 'mcp__docs__inspect_result',
+              args: { topic: 'alpha' },
+            }
+            yield {
+              type: 'tool_execution_end',
+              toolCallId: 'mcp-call-1',
+              toolName: 'mcp__docs__inspect_result',
+              result: {
+                content: [
+                  { type: 'text', text: 'topic=alpha' },
+                  { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' },
+                  { type: 'text', text: '[MCP resource result]\\n{"uri":"file:///alpha.txt"}' },
+                ],
+                structuredContent: {
+                  topic: 'alpha',
+                  ok: true,
+                },
+                details: {
+                  server: 'docs',
+                  toolName: 'inspect-result',
+                },
+              },
+              isError: false,
+            }
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const messages = []
+
+      for await (const message of adapter.query({
+        sessionId: 'session-pi-mcp-result',
+        prompt: 'call mcp',
+        model: 'deepseek-v4-flash',
+      })) {
+        messages.push(message)
+      }
+
+      const toolResultMessage = messages.find((message) => message.type === 'user')
+      const toolResultBlock = toolResultMessage?.message?.content?.[0]
+
+      console.log(JSON.stringify({
+        blockContent: toolResultBlock?.content,
+        toolUseResult: toolResultMessage?.toolUseResult,
+        resultSubtype: messages.at(-1)?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('blockContent'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      blockContent?: Array<{ type?: string; text?: string; data?: string; mimeType?: string }>
+      toolUseResult?: { structuredContent?: { topic?: string; ok?: boolean }; details?: { server?: string } }
+      resultSubtype?: string
+    }
+
+    expect(result.blockContent).toEqual([
+      { type: 'text', text: 'topic=alpha' },
+      { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' },
+      { type: 'text', text: '[MCP resource result]\n{"uri":"file:///alpha.txt"}' },
+    ])
+    expect(result.toolUseResult?.structuredContent).toEqual({ topic: 'alpha', ok: true })
+    expect(result.toolUseResult?.details?.server).toBe('docs')
+    expect(result.resultSubtype).toBe('success')
+  })
+
+  test('Given Pi final tool result is primitive When query runs Then preserves it as final result metadata', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: () => {},
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield {
+              type: 'tool_execution_end',
+              toolCallId: 'call-final-primitive',
+              toolName: 'bash',
+              result: 'done',
+              isError: false,
+            }
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const messages = []
+
+      for await (const message of adapter.query({
+        sessionId: 'session-pi-final-primitive',
+        prompt: 'hello',
+        model: 'deepseek-v4-flash',
+      })) {
+        messages.push(message)
+      }
+
+      const toolResult = messages.find((message) => message.type === 'user')
+      console.log(JSON.stringify({
+        block: toolResult?.message.content[0],
+        toolUseResult: toolResult?.toolUseResult,
+        resultSubtype: messages.at(-1)?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('toolUseResult'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      block?: { type?: string; tool_use_id?: string; content?: unknown; is_error?: boolean }
+      toolUseResult?: { result?: string; partialResult?: string; isError?: boolean }
+      resultSubtype?: string
+    }
+
+    expect(result.block).toEqual({
+      type: 'tool_result',
+      tool_use_id: 'call-final-primitive',
+      content: 'done',
+      is_error: false,
+    })
+    expect(result.toolUseResult).toEqual({
+      result: 'done',
+      isError: false,
+    })
+    expect(result.toolUseResult?.partialResult).toBeUndefined()
     expect(result.resultSubtype).toBe('success')
   })
 
@@ -362,6 +1130,73 @@ describe('PiAgentAdapter', () => {
     expect(result.texts).toEqual(['你', '好', '你好'])
     expect(result.transientFlags).toEqual([true, true, false])
     expect(result.deltaFlags).toEqual([true, true, false])
+    expect(result.resultSubtype).toBe('success')
+  })
+
+  test('Given Pi message end with entry id When query runs Then preserves Pi entry id without replacing SDK uuid', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: () => {},
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield {
+              type: 'message_end',
+              entryId: 'pi-entry-assistant-1',
+              message: {
+                role: 'assistant',
+                id: 'pi-message-assistant-1',
+                content: [{ type: 'text', text: 'final answer' }],
+                stopReason: 'stop',
+              },
+            }
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const messages = []
+
+      for await (const message of adapter.query({
+        sessionId: 'session-pi-entry-id',
+        prompt: 'hello',
+        model: 'deepseek-v4-flash',
+      })) {
+        messages.push(message)
+      }
+
+      const assistant = messages.find((message) => message.type === 'assistant')
+      console.log(JSON.stringify({
+        text: assistant?.message?.content?.[0]?.text,
+        uuid: assistant?.uuid ?? null,
+        piEntryId: assistant?._promaPiEntryId ?? null,
+        resultSubtype: messages.at(-1)?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('piEntryId'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      text?: string
+      uuid?: string | null
+      piEntryId?: string | null
+      resultSubtype?: string
+    }
+
+    expect(result.text).toBe('final answer')
+    expect(result.uuid).toBeNull()
+    expect(result.piEntryId).toBe('pi-entry-assistant-1')
     expect(result.resultSubtype).toBe('success')
   })
 
@@ -529,6 +1364,163 @@ describe('PiAgentAdapter', () => {
     })
   })
 
+  test('Given runtime extension path When query starts Then passes it to Pi process', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      let startInput = null
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: (input) => {
+          startInput = input
+          return {
+            send: () => {},
+            abort: () => {},
+            kill: () => {},
+            done: Promise.resolve({
+              exitCode: 0,
+              signal: null,
+              stdoutSnippet: '',
+              stderrSnippet: '',
+              aborted: false,
+            }),
+            events: (async function* () {
+              yield { type: 'agent_end', messages: [] }
+            })(),
+          }
+        },
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+
+      for await (const _message of adapter.query({
+        sessionId: 'session-pi-extension-path',
+        prompt: 'hello',
+        model: 'pi-model',
+        runtimeExtensionPaths: ['/tmp/proma-permission-bridge.mjs'],
+      })) {}
+
+      console.log(JSON.stringify({
+        extensionPaths: startInput?.extensionPaths ?? [],
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('extensionPaths'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      extensionPaths?: string[]
+    }
+
+    expect(result.extensionPaths).toEqual(['/tmp/proma-permission-bridge.mjs'])
+  })
+
+  test('Given runtime skill paths When query starts Then passes them to Pi process', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      let startInput = null
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: (input) => {
+          startInput = input
+          return {
+            send: () => {},
+            abort: () => {},
+            kill: () => {},
+            done: Promise.resolve({
+              exitCode: 0,
+              signal: null,
+              stdoutSnippet: '',
+              stderrSnippet: '',
+              aborted: false,
+            }),
+            events: (async function* () {
+              yield { type: 'agent_end', messages: [] }
+            })(),
+          }
+        },
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+
+      for await (const _message of adapter.query({
+        sessionId: 'session-pi-skill-path',
+        prompt: 'hello',
+        model: 'pi-model',
+        runtimeSkillPaths: ['/tmp/proma-workspace/skills', '/Users/test/.agents/skills'],
+      })) {}
+
+      console.log(JSON.stringify({
+        skillPaths: startInput?.skillPaths ?? [],
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('skillPaths'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      skillPaths?: string[]
+    }
+
+    expect(result.skillPaths).toEqual(['/tmp/proma-workspace/skills', '/Users/test/.agents/skills'])
+  })
+
+  test('Given runtime session path When query starts Then passes it to Pi process', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      let startInput = null
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: (input) => {
+          startInput = input
+          return {
+            send: () => {},
+            abort: () => {},
+            kill: () => {},
+            done: Promise.resolve({
+              exitCode: 0,
+              signal: null,
+              stdoutSnippet: '',
+              stderrSnippet: '',
+              aborted: false,
+            }),
+            events: (async function* () {
+              yield { type: 'agent_end', messages: [] }
+            })(),
+          }
+        },
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+
+      for await (const _message of adapter.query({
+        sessionId: 'session-pi-clone-resume',
+        prompt: 'continue',
+        model: 'pi-model',
+        runtimeSessionDir: '/tmp/proma-pi-sessions',
+        runtimeSessionPath: '/tmp/pi-native-clone.jsonl',
+      })) {}
+
+      console.log(JSON.stringify({
+        sessionId: startInput?.sessionId ?? null,
+        sessionDir: startInput?.sessionDir ?? null,
+        sessionPath: startInput?.sessionPath ?? null,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('sessionPath'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sessionId?: string | null
+      sessionDir?: string | null
+      sessionPath?: string | null
+    }
+
+    expect(result.sessionId).toBe('session-pi-clone-resume')
+    expect(result.sessionDir).toBe('/tmp/proma-pi-sessions')
+    expect(result.sessionPath).toBe('/tmp/pi-native-clone.jsonl')
+  })
+
   test('Given Pi assistant provider error When query runs Then surfaces visible error instead of success', () => {
     const output = runPiAdapterScript(`
       import { mock } from 'bun:test'
@@ -658,6 +1650,7 @@ describe('PiAgentAdapter', () => {
       console.warn = originalWarn
       console.log(JSON.stringify({
         warnings,
+        progressMessage: messages.find((message) => message._promaToolProgress === true),
         messageTypes: messages.map((message) => message.type),
         resultSubtype: messages.at(-1)?.subtype,
       }))
@@ -731,6 +1724,7 @@ describe('PiAgentAdapter', () => {
       console.warn = originalWarn
       console.log(JSON.stringify({
         warnings,
+        progressMessage: messages.find((message) => message._promaToolProgress === true),
         messageTypes: messages.map((message) => message.type),
         resultSubtype: messages.at(-1)?.subtype,
       }))
@@ -739,13 +1733,96 @@ describe('PiAgentAdapter', () => {
     const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('warnings'))
     const result = JSON.parse(jsonLine ?? '{}') as {
       warnings?: string[]
+      progressMessage?: {
+        toolUseResult?: {
+          toolName?: string
+          input?: Record<string, unknown>
+          partialResult?: string
+          isError?: boolean
+        }
+      }
       messageTypes?: string[]
       resultSubtype?: string
     }
 
     expect(result.messageTypes).toEqual(['user', 'result'])
+    expect(result.progressMessage?.toolUseResult).toEqual({
+      toolName: 'bash',
+      input: { command: 'pwd' },
+      partialResult: 'running',
+      isError: false,
+    })
     expect(result.resultSubtype).toBe('success')
     expect(result.warnings).toEqual([])
+  })
+
+  test('Given Pi queue update When query runs Then emits visible transient queue summary', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: () => {},
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield {
+              type: 'queue_update',
+              steering: ['请先检查 diff'],
+              followUp: ['然后继续修复测试', '最后总结'],
+            }
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const messages = []
+
+      for await (const message of adapter.query({
+        sessionId: 'session-pi-queue-summary',
+        prompt: 'hello',
+        model: 'deepseek-v4-flash',
+      })) {
+        messages.push(message)
+      }
+
+      console.log(JSON.stringify({
+        messageTypes: messages.map((message) => message.type),
+        summaryMessage: messages.find((message) => message.type === 'tool_use_summary'),
+        resultSubtype: messages.at(-1)?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('summaryMessage'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      messageTypes?: string[]
+      summaryMessage?: {
+        summary?: string
+        preceding_tool_use_ids?: string[]
+        _promaTransient?: boolean
+        _promaPiQueueSummary?: boolean
+      }
+      resultSubtype?: string
+    }
+
+    expect(result.messageTypes).toEqual(['tool_use_summary', 'result'])
+    expect(result.summaryMessage?.summary).toContain('Pi 队列')
+    expect(result.summaryMessage?.summary).toContain('steering: 1')
+    expect(result.summaryMessage?.summary).toContain('follow-up: 2')
+    expect(result.summaryMessage?.summary).toContain('请先检查 diff')
+    expect(result.summaryMessage?.preceding_tool_use_ids).toEqual([])
+    expect(result.summaryMessage?._promaTransient).toBe(true)
+    expect(result.summaryMessage?._promaPiQueueSummary).toBe(true)
+    expect(result.resultSubtype).toBe('success')
   })
 
   test('Given unknown Pi message update child event When query runs Then logs diagnostic and continues', () => {

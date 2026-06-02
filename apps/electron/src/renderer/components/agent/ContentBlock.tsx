@@ -24,6 +24,7 @@ import { MessageResponse } from '@/components/ai-elements/message'
 import { getToolIcon, extractFilePath } from './tool-utils'
 import { getToolPhrase } from './tool-phrase'
 import { ToolResultRenderer } from './tool-result-renderers'
+import { normalizeToolResultContent, type NormalizedToolResultContent } from './tool-result-content'
 import { PreviewOpenButton } from './tool-result-renderers/preview-open-button'
 import { getTaskGetStatusLabel, parseTaskGetResult, type ParsedTaskGetResult } from './tool-result-renderers/task-get-result'
 import { parseTaskListResult, type ParsedTaskListItem } from './tool-result-renderers/task-list-result'
@@ -44,6 +45,7 @@ import type {
 interface ToolResultData {
   result?: string
   isError?: boolean
+  normalized: NormalizedToolResultContent
 }
 
 /** 在 allMessages 中查找匹配 toolUseId 的工具结果 */
@@ -59,16 +61,9 @@ function useToolResult(toolUseId: string, allMessages: SDKMessage[]): ToolResult
         if (block.type === 'tool_result') {
           const resultBlock = block as SDKToolResultBlock
           if (resultBlock.tool_use_id === toolUseId) {
-            let result: string | undefined
-            if (typeof resultBlock.content === 'string') {
-              result = resultBlock.content
-            } else if (Array.isArray(resultBlock.content)) {
-              result = (resultBlock.content as Array<{ type: string; text?: string }>)
-                .filter((c) => c.type === 'text' && typeof c.text === 'string')
-                .map((c) => c.text)
-                .join('\n')
-            }
-            return { result, isError: resultBlock.is_error }
+            const rawToolUseResult = userMsg as unknown as Record<string, unknown>
+            const normalized = normalizeToolResultContent(resultBlock.content, rawToolUseResult.toolUseResult)
+            return { result: normalized.text, isError: resultBlock.is_error, normalized }
           }
         }
       }
@@ -353,7 +348,7 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
   const toolResult = useToolResult(block.id, allMessages)
   const resultText = toolResult?.result
   const isError = toolResult?.isError === true
-  const shouldShowResult = !!resultText
+  const shouldShowResult = !!resultText || (toolResult?.normalized.images.length ?? 0) > 0 || !!toolResult?.normalized.structuredJson
   const taskGetSummary = React.useMemo(() => {
     if (block.name !== 'TaskGet' || !resultText || isError) return null
     return parseTaskGetResult(resultText)
@@ -537,7 +532,7 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
         )}
       </button>
 
-      {shouldShowResult && resultText && expanded && (
+      {shouldShowResult && expanded && (
         <div className={cn(
           'ml-5.5 mt-1 mb-2 pl-3 border-l-2 border-border/30',
           animate && 'animate-in fade-in slide-in-from-top-1 duration-150',
@@ -545,9 +540,11 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
           <ToolResultRenderer
             toolName={block.name}
             input={block.input}
-            result={resultText}
+            result={resultText ?? ''}
             isError={isError}
             basePath={basePath}
+            images={toolResult?.normalized.images}
+            structuredJson={toolResult?.normalized.structuredJson}
           />
         </div>
       )}

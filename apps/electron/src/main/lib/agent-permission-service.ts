@@ -207,6 +207,26 @@ export class AgentPermissionService {
   }
 
   /**
+   * 检查外部运行时请求是否命中会话白名单。
+   */
+  isSessionWhitelisted(sessionId: string, toolName: string, input: Record<string, unknown>): boolean {
+    return this.isWhitelisted(sessionId, toolName, input)
+  }
+
+  /**
+   * 注册外部运行时已经构造好的权限请求。
+   *
+   * Pi RPC 的 tool_call extension 会先把工具信息转成结构化请求，
+   * 这里复用同一套 pending/响应/白名单流程，避免出现第二套权限 UI。
+   */
+  registerExternalPermissionRequest(
+    request: PermissionRequest,
+    resolve: (result: PermissionResult) => void,
+  ): void {
+    this.pendingPermissions.set(request.requestId, { resolve, request })
+  }
+
+  /**
    * 清除指定会话的白名单（会话结束时调用）
    */
   clearSessionWhitelist(sessionId: string): void {

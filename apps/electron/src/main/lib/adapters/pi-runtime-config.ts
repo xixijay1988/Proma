@@ -154,3 +154,88 @@ export function preparePiRuntimeConfig(input: {
 export function resolvePiProviderMappingForTest(provider: ProviderType): PiProviderMapping {
   return PI_PROVIDER_MAPPINGS[provider]
 }
+
+export function getPiRuntimeMappedProvidersForTest(): ProviderType[] {
+  return Object.keys(PI_PROVIDER_MAPPINGS) as ProviderType[]
+}
+
+export function getPiRuntimeProviderContractsForTest(): Array<{
+  providerType: ProviderType
+  piProvider: string
+  apiKeyEnv: string
+  registerModel: boolean
+}> {
+  return Object.entries(PI_PROVIDER_MAPPINGS).map(([providerType, mapping]) => ({
+    providerType: providerType as ProviderType,
+    piProvider: mapping.provider,
+    apiKeyEnv: mapping.apiKeyEnv,
+    registerModel: mapping.registerModel,
+  }))
+}
+
+export function ensurePiProviderDiagnosticExtensionForTest(input: {
+  configDir: string
+  providerName: string
+  apiKeyEnv: string
+}): string {
+  const extensionDir = join(input.configDir, 'proma-extensions')
+  mkdirSync(extensionDir, { recursive: true })
+  const extensionPath = join(extensionDir, 'proma-provider-diagnostic.mjs')
+  const source = `
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+const configDir = ${JSON.stringify(input.configDir)}
+const providerName = ${JSON.stringify(input.providerName)}
+const apiKeyEnv = ${JSON.stringify(input.apiKeyEnv)}
+
+function readProviderConfig() {
+  try {
+    const modelsPath = join(configDir, 'models.json')
+    const parsed = JSON.parse(readFileSync(modelsPath, 'utf-8'))
+    return parsed?.providers?.[providerName] ?? {}
+  } catch {
+    return {}
+  }
+}
+
+function formatProviderStatus() {
+  const providerConfig = readProviderConfig()
+  const models = Array.isArray(providerConfig.models) ? providerConfig.models : []
+  const modelIds = models.map((model) => model?.id).filter(Boolean)
+  const lines = [
+    'Proma Pi provider config 已加载。',
+    '- provider: ' + providerName,
+    '- api key env: ' + apiKeyEnv + ' ' + (process.env[apiKeyEnv] ? 'present' : 'missing'),
+  ]
+  if (providerConfig.baseUrl) {
+    lines.push('- baseUrl: ' + providerConfig.baseUrl)
+  }
+  if (modelIds.length > 0) {
+    lines.push('- models: ' + modelIds.join(', '))
+  }
+  return lines.join('\\n')
+}
+
+export default function promaProviderDiagnostic(pi) {
+  pi.registerCommand('proma:provider_config_status', {
+    description: formatProviderStatus(),
+    async handler(args, ctx) {
+      const providerConfig = readProviderConfig()
+      const models = Array.isArray(providerConfig.models) ? providerConfig.models : []
+      const data = {
+        providerName,
+        apiKeyEnv,
+        apiKeyPresent: Boolean(process.env[apiKeyEnv]),
+        baseUrl: providerConfig.baseUrl,
+        modelIds: models.map((model) => model?.id).filter(Boolean),
+      }
+      ctx.sendMessage(data)
+      return data
+    },
+  })
+}
+`
+  writeFileSync(extensionPath, source, 'utf-8')
+  return extensionPath
+}

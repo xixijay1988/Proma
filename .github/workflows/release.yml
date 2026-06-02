@@ -1,7 +1,7 @@
 # GitHub Actions: 自动打包分发
 #
 # 触发条件：推送 v* tag（如 v0.4.0）
-# 构建 macOS 和 Windows 产物并发布到 GitHub Releases
+# 构建 macOS、Windows 和 Linux 产物并发布到 GitHub Releases
 #
 # 所需 GitHub Secrets（macOS 签名/公证，可选）:
 # - MAC_CERTS: Base64 编码的 macOS Developer ID Application 证书 (.p12)
@@ -70,6 +70,16 @@ jobs:
         run: bun run electron:build
         working-directory: .
 
+      - name: Pi MCP packaged smoke 预检 (macOS arm64)
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          npx electron-builder --mac --arm64 --dir
+          bun run smoke:pi-mcp-packaged -- --platform darwin
+        working-directory: apps/electron
+
       # 打包并发布到 GitHub Releases
       - name: 打包并发布 (macOS)
         env:
@@ -132,6 +142,16 @@ jobs:
       - name: 构建 Electron 应用
         run: bun run electron:build
         working-directory: .
+
+      - name: Pi MCP packaged smoke 预检 (macOS x64)
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          npx electron-builder --mac --x64 --dir
+          bun run smoke:pi-mcp-packaged -- --platform darwin
+        working-directory: apps/electron
 
       # 打包并发布到 GitHub Releases
       - name: 打包并发布 (macOS x64)
@@ -310,8 +330,52 @@ jobs:
         run: bun run electron:build
         working-directory: .
 
+      - name: Pi MCP packaged smoke 预检 (Windows x64)
+        run: |
+          npx electron-builder --win --x64 --dir
+          bun run smoke:pi-mcp-packaged -- --platform win32
+        working-directory: apps/electron
+
       - name: 打包并发布 (Windows)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --win --x64 --publish always
+        working-directory: apps/electron
+
+  build-linux-x64:
+    name: build (ubuntu-latest, linux, x64, --x64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 安装依赖
+        run: bun install --frozen-lockfile
+
+      # 构建应用
+      - name: 构建 Electron 应用
+        run: bun run electron:build
+        working-directory: .
+
+      - name: Pi MCP packaged smoke 预检 (Linux x64)
+        run: |
+          npx electron-builder --linux --x64 --dir
+          bun run smoke:pi-mcp-packaged -- --platform linux
+        working-directory: apps/electron
+
+      - name: 打包并发布 (Linux)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --linux --x64 --publish always
         working-directory: apps/electron

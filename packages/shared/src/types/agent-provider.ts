@@ -46,6 +46,34 @@ export type AgentRuntimeExtensionUiHandler = (
   request: AgentRuntimeExtensionUiRequest
 ) => Promise<Omit<AgentRuntimeExtensionUiResponse, 'type' | 'id'> | void>
 
+/** Pi 原生可分叉消息候选（entry id 来自 Pi session tree） */
+export interface AgentRuntimeForkMessage {
+  id: string
+  text: string
+  [key: string]: unknown
+}
+
+/** Pi 原生 fork 返回值 */
+export interface AgentRuntimeForkResult {
+  cancelled: boolean
+  text?: string
+  [key: string]: unknown
+}
+
+/** Pi 原生 clone 返回值 */
+export interface AgentRuntimeCloneResult {
+  cancelled: boolean
+  sessionId?: string
+  sessionPath?: string
+  [key: string]: unknown
+}
+
+/** Pi 原生 switch_session 返回值 */
+export interface AgentRuntimeSwitchSessionResult {
+  cancelled: boolean
+  [key: string]: unknown
+}
+
 /**
  * Agent 查询输入（Provider 无关）
  *
@@ -65,6 +93,12 @@ export interface AgentQueryInput {
   provider?: string
   /** Runtime 原生会话目录（如 Pi RPC 的 --session-dir） */
   runtimeSessionDir?: string
+  /** Runtime 原生会话文件路径（如 Pi RPC 的 --session） */
+  runtimeSessionPath?: string
+  /** Runtime 原生扩展入口（如 Pi RPC 的 --extension） */
+  runtimeExtensionPaths?: string[]
+  /** Runtime 原生 Skill 路径（如 Pi RPC 的 --skill） */
+  runtimeSkillPaths?: string[]
   /** 传给底层 Runtime 子进程的额外环境变量 */
   runtimeEnv?: Record<string, string | undefined>
   /** 中止信号 */
@@ -97,4 +131,14 @@ export interface AgentProviderAdapter {
   cancelQueuedMessage?(sessionId: string, messageUuid: string): Promise<void>
   /** 动态切换活跃查询的权限模式（可选，仅支持 SDK 原生 setPermissionMode 的 Provider） */
   setPermissionMode?(sessionId: string, mode: string): Promise<void>
+  /** 获取活跃 runtime 的原生 fork 候选消息（可选，仅支持具备 session tree 的 Provider） */
+  getForkMessages?(sessionId: string): Promise<AgentRuntimeForkMessage[]>
+  /** 在活跃 runtime 中执行原生 fork（可选，仅支持具备 session tree 的 Provider） */
+  fork?(sessionId: string, entryId: string): Promise<AgentRuntimeForkResult>
+  /** 在活跃 runtime 中克隆当前分支到新原生 session（可选，仅支持具备 session tree 的 Provider） */
+  clone?(sessionId: string): Promise<AgentRuntimeCloneResult>
+  /** 在活跃 runtime 中切换到指定原生 session 文件（可选，仅支持具备 session tree 的 Provider） */
+  switchSession?(sessionId: string, sessionPath: string): Promise<AgentRuntimeSwitchSessionResult>
+  /** 获取活跃 runtime 当前消息快照（可选，用于 Pi 原生历史同步等运行中场景） */
+  getMessages?(sessionId: string): Promise<SDKMessage[]>
 }

@@ -75,7 +75,10 @@ function resolveCliFromPackageRoot(packageRoot: string): string {
 }
 
 export function resolvePiCliEntrypoint(): string {
-  const cjsRequire = createRequire(__filename)
+  const moduleAnchor = typeof __filename === 'string'
+    ? __filename
+    : join(process.cwd(), 'package.json')
+  const cjsRequire = createRequire(moduleAnchor)
   const packageRoot =
     resolvePackageRootFromPackageJson(cjsRequire) ??
     resolvePackageRootFromNodeModules(cjsRequire)
@@ -244,18 +247,24 @@ function buildPiRpcArgs(input: {
   provider?: string
   sessionId?: string
   sessionDir?: string
+  sessionPath?: string
+  extensionPaths?: string[]
+  skillPaths?: string[]
 }): string[] {
   const args = [resolvePiCliEntrypoint(), '--mode', 'rpc']
+  const sessionPath = input.sessionPath?.trim()
 
   if (input.sessionDir?.trim()) {
     args.push('--session-dir', input.sessionDir.trim())
   }
 
-  if (input.sessionId?.trim()) {
+  if (sessionPath) {
+    args.push('--session', sessionPath)
+  } else if (input.sessionId?.trim()) {
     args.push('--session-id', input.sessionId.trim())
   }
 
-  if (!input.sessionDir?.trim() && !input.sessionId?.trim()) {
+  if (!input.sessionDir?.trim() && !sessionPath && !input.sessionId?.trim()) {
     args.push('--no-session')
   }
 
@@ -267,6 +276,18 @@ function buildPiRpcArgs(input: {
     args.push('--model', input.model.trim())
   }
 
+  for (const extensionPath of input.extensionPaths ?? []) {
+    const normalizedPath = extensionPath.trim()
+    if (!normalizedPath) continue
+    args.push('--extension', normalizedPath)
+  }
+
+  for (const skillPath of input.skillPaths ?? []) {
+    const normalizedPath = skillPath.trim()
+    if (!normalizedPath) continue
+    args.push('--skill', normalizedPath)
+  }
+
   return args
 }
 
@@ -275,6 +296,9 @@ export function buildPiRpcArgsForTest(input: {
   provider?: string
   sessionId?: string
   sessionDir?: string
+  sessionPath?: string
+  extensionPaths?: string[]
+  skillPaths?: string[]
 }): string[] {
   return buildPiRpcArgs(input)
 }
@@ -285,6 +309,9 @@ export function startPiRpcSession(input: {
   provider?: string
   sessionId?: string
   sessionDir?: string
+  sessionPath?: string
+  extensionPaths?: string[]
+  skillPaths?: string[]
   runtimeEnv?: Record<string, string | undefined>
   abortSignal?: AbortSignal
 }): StartedPiRpcSession {
@@ -293,6 +320,9 @@ export function startPiRpcSession(input: {
     provider: input.provider,
     sessionId: input.sessionId,
     sessionDir: input.sessionDir,
+    sessionPath: input.sessionPath,
+    extensionPaths: input.extensionPaths,
+    skillPaths: input.skillPaths,
   }), {
     cwd: input.cwd,
     env: createPiEnv(input.runtimeEnv),

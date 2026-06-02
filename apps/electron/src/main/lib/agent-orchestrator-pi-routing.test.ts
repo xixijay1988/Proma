@@ -1,13 +1,13 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { describe, expect, test } from 'bun:test'
 
 function runOrchestratorScript(script: string): string {
   const homeDir = mkdtempSync(join(tmpdir(), 'proma-agent-orchestrator-'))
   try {
-    const result = Bun.spawnSync({
-      cmd: [process.execPath, '--eval', script],
+    const result = spawnSync(process.execPath, ['--eval', script], {
       cwd: import.meta.dir,
       env: {
         ...process.env,
@@ -15,13 +15,15 @@ function runOrchestratorScript(script: string): string {
         PROMA_DEV: undefined,
         CLAUDE_CONFIG_DIR: undefined,
       },
-      stdout: 'pipe',
-      stderr: 'pipe',
+      encoding: 'utf-8',
+      timeout: 15_000,
+      killSignal: 'SIGKILL',
     })
 
     const stdout = result.stdout.toString()
     const stderr = result.stderr.toString()
-    expect(result.exitCode, stderr || stdout).toBe(0)
+    expect(result.error, stderr || stdout).toBeUndefined()
+    expect(result.status, stderr || stdout).toBe(0)
     return stdout.trim()
   } finally {
     rmSync(homeDir, { recursive: true, force: true })
@@ -224,6 +226,97 @@ describe('AgentOrchestrator pi routing', () => {
     expect(result.openaiKey).toBe('sk-qwen')
     expect(result.piDirEndsWithSession).toBe(true)
     expect(result.piSessionDirEndsWith).toBe(true)
+  })
+
+  test('Given cloned pi session with native session path When sending message Then passes runtime session path to adapter', () => {
+    const output = runOrchestratorScript(`
+      import { mkdirSync, writeFileSync } from 'node:fs'
+      import { join } from 'node:path'
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      const configDir = join(process.env.HOME, '.proma')
+      mkdirSync(configDir, { recursive: true })
+      writeFileSync(join(configDir, 'agent-workspaces.json'), JSON.stringify({
+        version: 2,
+        workspaces: [{
+          id: 'workspace-pi',
+          name: 'Pi',
+          slug: 'pi',
+          agentEngine: 'pi',
+          createdAt: 1,
+          updatedAt: 1,
+        }],
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+      const { createAgentSession, updateAgentSessionMeta } = await import('./agent-session-manager.ts')
+
+      class FakePiAdapter {
+        lastInput = null
+
+        async *query(input) {
+          this.lastInput = input
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const source = createAgentSession('Pi clone', 'missing-channel', 'workspace-pi', 'pi')
+      updateAgentSessionMeta(source.id, {
+        forkSourcePiSessionId: 'pi-native-clone-id',
+        forkSourcePiSessionPath: '/tmp/pi-native-clone.jsonl',
+      })
+
+      const adapter = new FakePiAdapter()
+      const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
+
+      await orchestrator.sendMessage({
+        sessionId: source.id,
+        userMessage: 'continue from clone',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        workspaceId: 'workspace-pi',
+        startedAt: 654,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      console.log(JSON.stringify({
+        runtimeSessionPath: adapter.lastInput?.runtimeSessionPath ?? null,
+        sessionDirEndsWith: adapter.lastInput?.runtimeSessionDir?.endsWith('/pi-agent-sessions') ?? false,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('runtimeSessionPath'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      runtimeSessionPath?: string | null
+      sessionDirEndsWith?: boolean
+    }
+
+    expect(result.runtimeSessionPath).toBe('/tmp/pi-native-clone.jsonl')
+    expect(result.sessionDirEndsWith).toBe(true)
   })
 
   test('Given new pi session When first message runs Then generates title from the first user message', () => {
@@ -991,6 +1084,7 @@ describe('AgentOrchestrator pi routing', () => {
         truncateSDKMessages: () => {},
         resolveUserUuidFromSDK: () => undefined,
         rewindFilesFromSnapshot: () => ({ restoredFiles: [], failedFiles: [] }),
+        createPiNativeRewindSession: () => null,
         updateAgentSessionMeta: () => {},
         getAgentSessionMeta: () => undefined,
       }))
@@ -1043,5 +1137,739 @@ describe('AgentOrchestrator pi routing', () => {
     expect(result.abortCalls).toBe(1)
     expect(result.errorMessage).toBe('disk full')
     expect(result.completeCalled).toBe(true)
+  })
+
+  test('Given pi engine active session When queueing message Then delegates to Pi adapter and persists user message', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      const persisted = []
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      mock.module('./agent-session-manager.ts', () => ({
+        appendSDKMessages: (_sessionId, messages) => { persisted.push(...messages) },
+        getAgentSessionMessages: () => [],
+        getAgentSessionSDKMessages: () => [],
+        truncateSDKMessages: () => {},
+        resolveUserUuidFromSDK: () => undefined,
+        rewindFilesFromSnapshot: () => ({ restoredFiles: [], failedFiles: [] }),
+        createPiNativeRewindSession: () => null,
+        updateAgentSessionMeta: () => {},
+        getAgentSessionMeta: () => undefined,
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+
+      class FakePiAdapter {
+        queuedMessages = []
+        release = null
+
+        async *query() {
+          await new Promise((resolve) => { this.release = resolve })
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: 'session-pi-queue-orchestrator',
+          }
+        }
+
+        abort() {}
+        dispose() {}
+        async sendQueuedMessage(sessionId, message) {
+          this.queuedMessages.push({ sessionId, message })
+        }
+      }
+
+      const adapter = new FakePiAdapter()
+      const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
+
+      const runPromise = orchestrator.sendMessage({
+        sessionId: 'session-pi-queue-orchestrator',
+        userMessage: 'hello',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        startedAt: 901,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      const queuedUuid = await orchestrator.queueMessage(
+        'session-pi-queue-orchestrator',
+        'continue now',
+        undefined,
+        'queued-pi-1',
+        { interrupt: true },
+      )
+
+      adapter.release()
+      await runPromise
+
+      console.log(JSON.stringify({
+        queuedUuid,
+        queuedCount: adapter.queuedMessages.length,
+        queuedText: adapter.queuedMessages[0]?.message?.message?.content ?? null,
+        queuedPriority: adapter.queuedMessages[0]?.message?.priority ?? null,
+        persistedTexts: persisted.map((message) => message.message?.content?.[0]?.text ?? null),
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('queuedCount'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      queuedUuid?: string
+      queuedCount?: number
+      queuedText?: string | null
+      queuedPriority?: string | null
+      persistedTexts?: Array<string | null>
+    }
+
+    expect(result.queuedUuid).toBe('queued-pi-1')
+    expect(result.queuedCount).toBe(1)
+    expect(result.queuedText).toBe('continue now')
+    expect(result.queuedPriority).toBe('now')
+    expect(result.persistedTexts).toContain('continue now')
+  })
+
+  test('Given pi engine active session When stopping Then aborts Pi adapter and completes as stopped by user', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      const metaUpdates = []
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      mock.module('./agent-session-manager.ts', () => ({
+        appendSDKMessages: () => {},
+        getAgentSessionMessages: () => [],
+        getAgentSessionSDKMessages: () => [],
+        truncateSDKMessages: () => {},
+        resolveUserUuidFromSDK: () => undefined,
+        rewindFilesFromSnapshot: () => ({ restoredFiles: [], failedFiles: [] }),
+        createPiNativeRewindSession: () => null,
+        updateAgentSessionMeta: (sessionId, patch) => { metaUpdates.push({ sessionId, patch }) },
+        getAgentSessionMeta: () => undefined,
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+
+      class FakePiAdapter {
+        abortCalls = 0
+        release = null
+        running = true
+
+        async *query() {
+          await new Promise((resolve) => { this.release = resolve })
+          yield {
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: 'late text after abort' }] },
+            parent_tool_use_id: null,
+            session_id: 'session-pi-stop',
+          }
+        }
+
+        abort() {
+          if (!this.running) return
+          this.running = false
+          this.abortCalls += 1
+          this.release?.()
+        }
+
+        dispose() {}
+      }
+
+      const adapter = new FakePiAdapter()
+      const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
+      let completeStoppedByUser = null
+      let completeStartedAt = null
+
+      const runPromise = orchestrator.sendMessage({
+        sessionId: 'session-pi-stop',
+        userMessage: 'long task',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        startedAt: 902,
+      }, {
+        onError: () => {},
+        onComplete: (_messages, opts) => {
+          completeStoppedByUser = opts?.stoppedByUser ?? null
+          completeStartedAt = opts?.startedAt ?? null
+        },
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      const activeBeforeStop = orchestrator.isActive('session-pi-stop')
+      orchestrator.stop('session-pi-stop')
+      await runPromise
+
+      console.log(JSON.stringify({
+        activeBeforeStop,
+        activeAfterStop: orchestrator.isActive('session-pi-stop'),
+        abortCalls: adapter.abortCalls,
+        completeStoppedByUser,
+        completeStartedAt,
+        stoppedPatch: metaUpdates.find((item) => item.patch?.stoppedByUser === true)?.patch ?? null,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('abortCalls'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      activeBeforeStop?: boolean
+      activeAfterStop?: boolean
+      abortCalls?: number
+      completeStoppedByUser?: boolean | null
+      completeStartedAt?: number | null
+      stoppedPatch?: { stoppedByUser?: boolean } | null
+    }
+
+    expect(result.activeBeforeStop).toBe(true)
+    expect(result.activeAfterStop).toBe(false)
+    expect(result.abortCalls).toBe(1)
+    expect(result.completeStoppedByUser).toBe(true)
+    expect(result.completeStartedAt).toBe(902)
+    expect(result.stoppedPatch).toEqual({ stoppedByUser: true })
+  })
+
+  test('Given pi workspace When sending message Then prompt declares MCP Skill boundary and loads Pi extensions plus skills', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      mock.module('./agent-workspace-manager.ts', () => ({
+        getAgentWorkspace: (id) => id === 'workspace-pi'
+          ? { id, name: 'Pi Workspace', slug: 'pi-workspace', agentEngine: 'pi', createdAt: 0, updatedAt: 0 }
+          : undefined,
+        getWorkspaceMcpConfig: () => ({
+          servers: {
+            docs: { type: 'stdio', command: 'mcp-docs', enabled: true },
+            disabled: { type: 'stdio', command: 'mcp-disabled', enabled: false },
+          },
+        }),
+        getWorkspaceSkills: () => [
+          { slug: 'code-review', name: 'Code Review', description: '审查代码', enabled: true },
+          { slug: 'disabled-skill', name: 'Disabled Skill', enabled: false },
+        ],
+        getWorkspaceAttachedDirectories: () => [],
+        getWorkspaceAttachedFiles: () => [],
+        ensurePluginManifest: () => {},
+      }))
+
+      const { mkdirSync, writeFileSync } = await import('node:fs')
+      const { join } = await import('node:path')
+      const globalSkillsDir = join(process.env.HOME, '.agents', 'skills')
+      const workspaceSkillsDir = join(process.env.HOME, '.proma', 'agent-workspaces', 'pi-workspace', 'skills')
+      mkdirSync(join(globalSkillsDir, 'using-superpowers'), { recursive: true })
+      writeFileSync(join(globalSkillsDir, 'using-superpowers', 'SKILL.md'), [
+        '---',
+        'name: using-superpowers',
+        'description: 使用指南',
+        '---',
+        '',
+        '# Using Superpowers',
+        'Always load relevant skills first.',
+      ].join('\\n'))
+      mkdirSync(join(workspaceSkillsDir, 'code-review'), { recursive: true })
+      writeFileSync(join(workspaceSkillsDir, 'code-review', 'SKILL.md'), [
+        '---',
+        'name: Code Review',
+        'description: 审查代码',
+        '---',
+        '',
+        '# Code Review',
+        'Find bugs before summaries.',
+      ].join('\\n'))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+
+      class FakePiAdapter {
+        lastInput = null
+
+        async *query(input) {
+          this.lastInput = input
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const adapter = new FakePiAdapter()
+      const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
+
+      await orchestrator.sendMessage({
+        sessionId: 'session-pi-boundary',
+        userMessage: '请使用 /skill:code-review 和 /skill:using-superpowers #mcp:docs 帮我检查',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        workspaceId: 'workspace-pi',
+        mentionedSkills: ['code-review', 'using-superpowers'],
+        mentionedMcpServers: ['docs'],
+        startedAt: 777,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      console.log(JSON.stringify({
+        prompt: adapter.lastInput?.prompt ?? '',
+        extensionCount: adapter.lastInput?.runtimeExtensionPaths?.length ?? 0,
+        extensionPaths: adapter.lastInput?.runtimeExtensionPaths ?? [],
+        skillPaths: adapter.lastInput?.runtimeSkillPaths ?? [],
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('extensionCount'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      prompt?: string
+      extensionCount?: number
+      extensionPaths?: string[]
+      skillPaths?: string[]
+    }
+
+    expect(result.prompt).toContain('<pi_capability_boundary>')
+    expect(result.prompt).toContain('Proma 会通过 Pi MCP bridge extension 将已启用 MCP 服务器暴露为 Pi 原生桥接工具')
+    expect(result.prompt).toContain('优先使用逐工具注册的 mcp__<server>__<tool>')
+    expect(result.prompt).toContain('逐工具枚举失败或不确定工具名时再调用 list_tools / call_tool')
+    expect(result.prompt).toContain('mcp__docs__list_tools')
+    expect(result.prompt).toContain('mcp__docs__call_tool')
+    expect(result.prompt).toContain('Pi native skill paths:')
+    expect(result.prompt).toContain('docs')
+    expect(result.prompt).toContain('code-review: Code Review')
+    expect(result.prompt).toContain('Pi 原生 --skill loader')
+    expect(result.prompt).toContain('<mentioned_pi_skills>')
+    expect(result.prompt).toContain('<skill name="code-review"')
+    expect(result.prompt).toContain('Find bugs before summaries.')
+    expect(result.prompt).toContain('<skill name="using-superpowers"')
+    expect(result.prompt).toContain('Always load relevant skills first.')
+    expect(result.extensionCount).toBe(4)
+    expect(result.extensionPaths?.some((path) => path.includes('proma-permission-bridge.mjs'))).toBe(true)
+    expect(result.extensionPaths?.some((path) => path.includes('proma-task-bridge.mjs'))).toBe(true)
+    expect(result.extensionPaths?.some((path) => path.includes('proma-mcp-bridge.mjs'))).toBe(true)
+    expect(result.extensionPaths?.some((path) => path.includes('proma-git-checkpoint.mjs'))).toBe(true)
+    expect(result.skillPaths?.some((path) => path.endsWith('/agent-workspaces/pi-workspace/skills'))).toBe(true)
+    expect(result.skillPaths?.some((path) => path.endsWith('/.agents/skills'))).toBe(true)
+  })
+
+  test('Given pi workspace and enabled memory When sending message Then loads Pi memory extension and advertises memory tools', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      mock.module('./memory-service.ts', () => ({
+        getMemoryConfig: () => ({
+          enabled: true,
+          apiKey: 'sk-memory-secret',
+          userId: 'proma-user',
+          baseUrl: 'https://memory.example.test/api',
+        }),
+      }))
+
+      mock.module('./agent-workspace-manager.ts', () => ({
+        getAgentWorkspace: (id) => id === 'workspace-pi'
+          ? { id, name: 'Pi Workspace', slug: 'pi-workspace', agentEngine: 'pi', createdAt: 0, updatedAt: 0 }
+          : undefined,
+        getWorkspaceMcpConfig: () => ({ servers: {} }),
+        getWorkspaceSkills: () => [],
+        getWorkspaceAttachedDirectories: () => [],
+        getWorkspaceAttachedFiles: () => [],
+        ensurePluginManifest: () => {},
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+
+      class FakePiAdapter {
+        lastInput = null
+
+        async *query(input) {
+          this.lastInput = input
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const adapter = new FakePiAdapter()
+      const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
+
+      await orchestrator.sendMessage({
+        sessionId: 'session-pi-memory',
+        userMessage: '请回忆一下我的偏好',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        workspaceId: 'workspace-pi',
+        startedAt: 888,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      console.log(JSON.stringify({
+        prompt: adapter.lastInput?.prompt ?? '',
+        extensionCount: adapter.lastInput?.runtimeExtensionPaths?.length ?? 0,
+        extensionPaths: adapter.lastInput?.runtimeExtensionPaths ?? [],
+        memoryKey: adapter.lastInput?.runtimeEnv?.PROMA_MEMOS_API_KEY ?? null,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('memoryKey'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      prompt?: string
+      extensionCount?: number
+      extensionPaths?: string[]
+      memoryKey?: string | null
+    }
+
+    expect(result.extensionCount).toBe(4)
+    expect(result.extensionPaths?.some((path) => path.includes('proma-task-bridge.mjs'))).toBe(true)
+    expect(result.extensionPaths?.some((path) => path.includes('proma-memory-bridge.mjs'))).toBe(true)
+    expect(result.memoryKey).toBe('sk-memory-secret')
+    expect(result.prompt).toContain('mcp__mem__recall_memory')
+    expect(result.prompt).toContain('mcp__mem__add_memory')
+    expect(result.prompt).not.toContain('sk-memory-secret')
+  })
+
+  test('Given pi workspace and enabled nano banana When sending message Then loads Pi image extension and advertises image tool', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      mock.module('./chat-tool-config.ts', () => ({
+        getToolState: (toolId) => toolId === 'nano-banana' ? { enabled: true } : { enabled: false },
+        getToolCredentials: (toolId) => toolId === 'nano-banana'
+          ? {
+              apiKey: 'sk-nano-secret',
+              baseUrl: 'https://gemini.example.test',
+              model: 'gemini-image-test',
+            }
+          : {},
+      }))
+
+      mock.module('./agent-workspace-manager.ts', () => ({
+        getAgentWorkspace: (id) => id === 'workspace-pi'
+          ? { id, name: 'Pi Workspace', slug: 'pi-workspace', agentEngine: 'pi', createdAt: 0, updatedAt: 0 }
+          : undefined,
+        getWorkspaceMcpConfig: () => ({ servers: {} }),
+        getWorkspaceSkills: () => [],
+        getWorkspaceAttachedDirectories: () => [],
+        getWorkspaceAttachedFiles: () => [],
+        ensurePluginManifest: () => {},
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+
+      class FakePiAdapter {
+        lastInput = null
+
+        async *query(input) {
+          this.lastInput = input
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const adapter = new FakePiAdapter()
+      const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
+
+      await orchestrator.sendMessage({
+        sessionId: 'session-pi-nano',
+        userMessage: '帮我生成一张图',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        workspaceId: 'workspace-pi',
+        startedAt: 889,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      console.log(JSON.stringify({
+        prompt: adapter.lastInput?.prompt ?? '',
+        extensionCount: adapter.lastInput?.runtimeExtensionPaths?.length ?? 0,
+        extensionPaths: adapter.lastInput?.runtimeExtensionPaths ?? [],
+        nanoKey: adapter.lastInput?.runtimeEnv?.PROMA_NANO_BANANA_API_KEY ?? null,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('nanoKey'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      prompt?: string
+      extensionCount?: number
+      extensionPaths?: string[]
+      nanoKey?: string | null
+    }
+
+    expect(result.extensionCount).toBe(4)
+    expect(result.extensionPaths?.some((path) => path.includes('proma-task-bridge.mjs'))).toBe(true)
+    expect(result.extensionPaths?.some((path) => path.includes('proma-nano-banana-bridge.mjs'))).toBe(true)
+    expect(result.nanoKey).toBe('sk-nano-secret')
+    expect(result.prompt).toContain('mcp__nano_banana__generate_image')
+    expect(result.prompt).not.toContain('sk-nano-secret')
+  })
+
+  test('Given pi workspace When sending message Then loads Pi task extension and advertises task tools', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      mock.module('./agent-workspace-manager.ts', () => ({
+        getAgentWorkspace: (id) => id === 'workspace-pi'
+          ? { id, name: 'Pi Workspace', slug: 'pi-workspace', agentEngine: 'pi', createdAt: 0, updatedAt: 0 }
+          : undefined,
+        getWorkspaceMcpConfig: () => ({ servers: {} }),
+        getWorkspaceSkills: () => [],
+        getWorkspaceAttachedDirectories: () => [],
+        getWorkspaceAttachedFiles: () => [],
+        ensurePluginManifest: () => {},
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+
+      class FakePiAdapter {
+        lastInput = null
+
+        async *query(input) {
+          this.lastInput = input
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const adapter = new FakePiAdapter()
+      const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
+
+      await orchestrator.sendMessage({
+        sessionId: 'session-pi-task-tools',
+        userMessage: '请分步骤完成这个任务',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        workspaceId: 'workspace-pi',
+        startedAt: 890,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      console.log(JSON.stringify({
+        prompt: adapter.lastInput?.prompt ?? '',
+        extensionCount: adapter.lastInput?.runtimeExtensionPaths?.length ?? 0,
+        extensionPaths: adapter.lastInput?.runtimeExtensionPaths ?? [],
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('extensionCount'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      prompt?: string
+      extensionCount?: number
+      extensionPaths?: string[]
+    }
+
+    expect(result.extensionPaths?.some((path) => path.includes('proma-task-bridge.mjs'))).toBe(true)
+    expect(result.prompt).toContain('TaskCreate')
+    expect(result.prompt).toContain('TaskUpdate')
+    expect(result.prompt).toContain('TaskGet')
+    expect(result.prompt).toContain('TaskList')
+  })
+
+  test('Given pi permission request is always allowed When requested again Then skips second prompt', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+      const { permissionService } = await import('./agent-permission-service.ts')
+
+      const permissionPayload = {
+        promaPermissionRequest: true,
+        toolName: 'write',
+        toolInput: { path: '/tmp/file.txt', content: 'hello' },
+        description: '写入文件: /tmp/file.txt',
+        dangerLevel: 'normal',
+        toolCallId: 'tool-1',
+      }
+
+      class FakePiAdapter {
+        async *query(input) {
+          const first = await input.handleExtensionUiRequest({
+            type: 'extension_ui_request',
+            id: 'perm-1',
+            method: 'confirm',
+            title: 'Proma Pi 权限确认',
+            message: JSON.stringify(permissionPayload),
+          })
+          const second = await input.handleExtensionUiRequest({
+            type: 'extension_ui_request',
+            id: 'perm-2',
+            method: 'confirm',
+            title: 'Proma Pi 权限确认',
+            message: JSON.stringify({ ...permissionPayload, toolCallId: 'tool-2' }),
+          })
+          yield {
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: JSON.stringify({ first, second }) }] },
+            parent_tool_use_id: null,
+            session_id: input.sessionId,
+          }
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const eventBus = new AgentEventBus()
+      const permissionRequestIds = []
+      eventBus.use((sessionId, payload, next) => {
+        if (payload.kind === 'proma_event' && payload.event.type === 'permission_request') {
+          permissionRequestIds.push(payload.event.request.requestId)
+          permissionService.respondToPermission(payload.event.request.requestId, 'allow', true)
+        }
+        next()
+      })
+
+      const orchestrator = new AgentOrchestrator(new FakePiAdapter(), eventBus, 'pi')
+
+      await orchestrator.sendMessage({
+        sessionId: 'session-pi-whitelist',
+        userMessage: 'write twice',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        startedAt: 778,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      console.log(JSON.stringify({
+        permissionRequestIds,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('permissionRequestIds'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      permissionRequestIds?: string[]
+    }
+
+    expect(result.permissionRequestIds).toEqual(['perm-1'])
   })
 })

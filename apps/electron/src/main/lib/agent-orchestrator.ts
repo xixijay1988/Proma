@@ -38,6 +38,7 @@ import type {
   AgentRuntimeExtensionUiRequest,
   AgentRuntimeExtensionUiHandler,
   AgentRuntimeExtensionUiResponse,
+  DangerLevel,
 } from '@proma/shared'
 import {
   PROMA_DEFAULT_PERMISSION_MODE,
@@ -56,9 +57,9 @@ import { decryptApiKey, getChannelById, listChannels } from './channel-manager'
 import { getAdapter, fetchTitle, normalizeAnthropicBaseUrlForSdk } from '@proma/core'
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
-import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, getAgentSessionSDKMessages, truncateSDKMessages, resolveUserUuidFromSDK, rewindFilesFromSnapshot } from './agent-session-manager'
-import { getAgentWorkspace, getWorkspaceMcpConfig, ensurePluginManifest } from './agent-workspace-manager'
-import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getWorkspaceFilesDir, getConfigDirName, getConfigDir } from './config-paths'
+import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, getAgentSessionSDKMessages, truncateSDKMessages, resolveUserUuidFromSDK, rewindFilesFromSnapshot, createPiNativeRewindSession } from './agent-session-manager'
+import { getAgentWorkspace, getWorkspaceMcpConfig, getWorkspaceSkills, ensurePluginManifest } from './agent-workspace-manager'
+import { getAgentWorkspacePath, getAgentSessionWorkspacePath, getSdkConfigDir, getWorkspaceFilesDir, getConfigDirName, getConfigDir, getWorkspaceMcpPath, getWorkspaceSkillsDir } from './config-paths'
 import { getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles } from './agent-workspace-manager'
 import { getRuntimeStatus } from './runtime-init'
 import { getSettings } from './settings-service'
@@ -72,6 +73,14 @@ import { searchMemory, addMemory, formatSearchResult } from './memos-client'
 import { validateToolInput } from './agent-tool-input-validator'
 import { estimateTokenCount, WRITE_CONTENT_TOKEN_THRESHOLD } from './agent-tool-token-estimator'
 import { preparePiRuntimeConfig } from './adapters/pi-runtime-config'
+import { ensurePiPermissionExtension } from './adapters/pi-permission-extension'
+import { buildPiMcpBridgeListToolsToolName, buildPiMcpBridgeRemoteToolPattern, buildPiMcpBridgeToolName, ensurePiMcpExtension } from './adapters/pi-mcp-extension'
+import { ensurePiMemoryExtension } from './adapters/pi-memory-extension'
+import { ensurePiNanoBananaExtension } from './adapters/pi-nano-banana-extension'
+import { ensurePiTaskExtension } from './adapters/pi-task-extension'
+import { ensurePiGitCheckpointExtension, findPiGitCheckpointForEntry } from './adapters/pi-git-checkpoint-extension'
+import { getToolCredentials, getToolState } from './chat-tool-config'
+import { resolveExistingSessionAgentEngine } from './agent-engine'
 
 // ===== 类型定义 =====
 
@@ -127,6 +136,203 @@ function extractFirstAskUserAnswer(updatedInput: Record<string, unknown> | undef
   }
 
   return null
+}
+
+interface PiStructuredPermissionRequest {
+  toolName: string
+  toolInput: Record<string, unknown>
+  description: string
+  command?: string
+  dangerLevel?: DangerLevel
+  toolCallId?: string
+}
+
+function parsePiStructuredPermissionRequest(request: AgentRuntimeExtensionUiRequest): PiStructuredPermissionRequest | null {
+  if (request.method !== 'confirm') return null
+  if (request.title !== 'Proma Pi 权限确认') return null
+  if (typeof request.message !== 'string') return null
+
+  try {
+    const parsed = JSON.parse(request.message) as unknown
+    if (!parsed || typeof parsed !== 'object') return null
+    const record = parsed as Record<string, unknown>
+    if (record.promaPermissionRequest !== true) return null
+    if (typeof record.toolName !== 'string' || !record.toolName.trim()) return null
+
+    const toolInput = record.toolInput && typeof record.toolInput === 'object'
+      ? record.toolInput as Record<string, unknown>
+      : {}
+    const description = typeof record.description === 'string' && record.description.trim()
+      ? record.description.trim()
+      : `使用 Pi 工具: ${record.toolName}`
+    const command = typeof record.command === 'string' ? record.command : undefined
+    const dangerLevel = record.dangerLevel === 'safe' || record.dangerLevel === 'normal' || record.dangerLevel === 'dangerous'
+      ? record.dangerLevel
+      : undefined
+    const toolCallId = typeof record.toolCallId === 'string' ? record.toolCallId : undefined
+
+    return {
+      toolName: record.toolName,
+      toolInput,
+      description,
+      ...(command && { command }),
+      ...(dangerLevel && { dangerLevel }),
+      ...(toolCallId && { toolCallId }),
+    }
+  } catch {
+    return null
+  }
+}
+
+function toPromaPiPermissionToolName(toolName: string): string {
+  const normalized = toolName.replace(/[\s_-]/g, '').toLowerCase()
+  switch (normalized) {
+    case 'bash':
+    case 'shell':
+      return 'Bash'
+    case 'write':
+      return 'Write'
+    case 'edit':
+    case 'multiedit':
+      return 'Edit'
+    case 'notebookedit':
+      return 'NotebookEdit'
+    case 'read':
+      return 'Read'
+    case 'grep':
+      return 'Grep'
+    case 'glob':
+    case 'find':
+      return 'Glob'
+    case 'ls':
+      return 'LS'
+    default:
+      return toolName
+  }
+}
+
+function buildPiCapabilityBoundaryPrompt(input: {
+  userMessage: string
+  workspaceName?: string
+  workspaceSlug?: string
+  workspacePath?: string
+  mcpConfigPath?: string
+  skillsDir?: string
+  piSkillPaths: string[]
+  enabledMcpServers: string[]
+  piMcpBridgeToolNames: string[]
+  piBuiltinMcpToolNames: string[]
+  enabledSkills: Array<{ slug: string; name: string; description?: string }>
+}): string {
+  const mcpLines = input.enabledMcpServers.length > 0
+    ? input.enabledMcpServers.map((name) => `- ${name}`).join('\n')
+    : '- 无已启用的工作区 MCP 服务器'
+  const mcpBridgeLines = input.piMcpBridgeToolNames.length > 0
+    ? input.piMcpBridgeToolNames.map((toolName) => `- ${toolName}`).join('\n')
+    : '- 未加载 Pi MCP bridge 工具'
+  const builtinMcpLines = input.piBuiltinMcpToolNames.length > 0
+    ? input.piBuiltinMcpToolNames.map((toolName) => `- ${toolName}`).join('\n')
+    : '- 未加载 Proma 内置 Pi MCP 工具'
+  const skillLines = input.enabledSkills.length > 0
+    ? input.enabledSkills.map((skill) => `- ${skill.slug}: ${skill.name}${skill.description ? ` — ${skill.description}` : ''}`).join('\n')
+    : '- 无已启用的工作区 Skill'
+
+  return [
+    '<pi_capability_boundary>',
+    '当前 Pi Agent RPC 集成支持本地 coding 最小闭环：read/write/edit/bash/grep/find/ls 等 Pi 内置工具、Proma 统一权限确认、会话工作目录和文件流式展示。',
+    'Proma 会通过 Pi MCP bridge extension 将已启用 MCP 服务器暴露为 Pi 原生桥接工具。若 MCP 服务器启动时可枚举工具，优先使用逐工具注册的 mcp__<server>__<tool>；逐工具枚举失败或不确定工具名时再调用 list_tools / call_tool。',
+    '每个 MCP 服务器都会保留 mcp__<server>__list_tools 和 mcp__<server>__call_tool 作为兜底；list_tools 用于查看远端工具名和 inputSchema，call_tool 通过 toolName 和 arguments 调用。',
+    '这不是 Claude Agent SDK 的 MCP 深度注入；请如实说明当前是 Proma 为 Pi 生成的 MCP bridge。若用户要求配置 MCP，可以编辑对应 mcp.json；若用户要求调用 MCP，请优先使用逐工具 Pi MCP bridge 工具，必要时使用下方服务器级兜底工具。',
+    'Proma 已将可用 Skills 通过 Pi 原生 --skill loader 加载到当前 Pi RPC 会话。你可以依据 Pi <available_skills> 中的描述按需读取对应 SKILL.md；用户明确引用 Skill 时，应主动按该 Skill 指令执行，但不要声称它是 Claude SDK Skill 调用。',
+    input.workspaceName ? `Workspace: ${input.workspaceName}` : 'Workspace: 未选择',
+    input.workspaceSlug ? `Workspace slug: ${input.workspaceSlug}` : 'Workspace slug: 未选择',
+    input.workspacePath ? `Workspace path: ${input.workspacePath}` : 'Workspace path: 未选择',
+    input.mcpConfigPath ? `MCP config path: ${input.mcpConfigPath}` : 'MCP config path: 未选择',
+    input.skillsDir ? `Skills dir: ${input.skillsDir}` : 'Skills dir: 未选择',
+    `Pi native skill paths: ${input.piSkillPaths.length > 0 ? input.piSkillPaths.join(', ') : '未加载'}`,
+    'Enabled MCP servers:',
+    mcpLines,
+    'Pi MCP bridge tools:',
+    mcpBridgeLines,
+    'Proma builtin Pi MCP tools:',
+    builtinMcpLines,
+    'Enabled Skills:',
+    skillLines,
+    '</pi_capability_boundary>',
+    '',
+    input.userMessage,
+  ].join('\n')
+}
+
+function getPiGlobalSkillPaths(): string[] {
+  return [
+    join(homedir(), '.agents', 'skills'),
+  ].filter((skillPath) => existsSync(skillPath))
+}
+
+function getPiRuntimeSkillPaths(workspaceSlug?: string): string[] {
+  const paths = [
+    ...(workspaceSlug ? [getWorkspaceSkillsDir(workspaceSlug)] : []),
+    ...getPiGlobalSkillPaths(),
+  ]
+
+  return [...new Set(paths.filter((skillPath) => existsSync(skillPath)))]
+}
+
+function stripSkillFrontmatter(content: string): string {
+  return content.replace(/^---\s*\n[\s\S]*?\n---\s*\n?/, '').trim()
+}
+
+function escapePiSkillAttr(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function buildMentionedPiSkillsBlock(input: {
+  mentionedSkills?: string[]
+  skillSearchDirs: string[]
+}): string {
+  const uniqueSlugs = [...new Set((input.mentionedSkills ?? []).map((slug) => slug.trim()).filter(Boolean))]
+  if (uniqueSlugs.length === 0) return ''
+
+  const blocks: string[] = []
+  for (const slug of uniqueSlugs) {
+    const skillDir = input.skillSearchDirs
+      .map((dir) => join(dir, slug))
+      .find((candidate) => existsSync(join(candidate, 'SKILL.md')))
+    if (!skillDir) {
+      blocks.push(`<!-- Skill ${slug} 未在 Pi runtime skill paths 中找到，保留原始引用。 -->`)
+      continue
+    }
+
+    try {
+      const skillPath = join(skillDir, 'SKILL.md')
+      const body = stripSkillFrontmatter(readFileSync(skillPath, 'utf-8'))
+      if (!body) continue
+      blocks.push([
+        `<skill name="${escapePiSkillAttr(slug)}" location="${escapePiSkillAttr(skillPath)}">`,
+        `References are relative to ${skillDir}.`,
+        '',
+        body,
+        '</skill>',
+      ].join('\n'))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      blocks.push(`<!-- Skill ${slug} 读取失败: ${message} -->`)
+    }
+  }
+
+  if (blocks.length === 0) return ''
+
+  return [
+    '<mentioned_pi_skills>',
+    '用户明确引用了以下 Pi Skills。Proma 已按 Pi 原生 /skill 展开格式注入正文，请先遵循这些 Skill 指令，再处理用户消息。',
+    blocks.join('\n\n'),
+    '</mentioned_pi_skills>',
+  ].join('\n')
 }
 
 function buildPiRuntimePrompt(input: {
@@ -598,6 +804,49 @@ export class AgentOrchestrator {
     return async (request: AgentRuntimeExtensionUiRequest): Promise<Omit<AgentRuntimeExtensionUiResponse, 'type' | 'id'> | void> => {
       switch (request.method) {
         case 'confirm': {
+          const structuredRequest = parsePiStructuredPermissionRequest(request)
+          if (structuredRequest) {
+            const toolName = toPromaPiPermissionToolName(structuredRequest.toolName)
+            if (permissionService.isSessionWhitelisted(sessionId, toolName, structuredRequest.toolInput)) {
+              return { confirmed: true }
+            }
+
+            const permissionRequest: PermissionRequest = {
+              requestId: request.id,
+              sessionId,
+              toolName,
+              toolInput: structuredRequest.toolInput,
+              description: structuredRequest.description,
+              ...(structuredRequest.command && { command: structuredRequest.command }),
+              dangerLevel: structuredRequest.dangerLevel ?? 'normal',
+              decisionReason: 'Pi Agent 工具调用需要 Proma 权限确认',
+              decisionReasonType: 'pi_tool_call',
+              classifierApprovable: false,
+              sdkDisplayName: `Pi ${structuredRequest.toolName}`,
+              sdkTitle: `Pi 请求使用 ${structuredRequest.toolName}`,
+              sdkDescription: structuredRequest.description,
+            }
+
+            return new Promise<Omit<AgentRuntimeExtensionUiResponse, 'type' | 'id'>>((resolve) => {
+              const abortListener = (): void => {
+                resolve({ cancelled: true, reason: '操作已中止' })
+              }
+              abortSignal.addEventListener('abort', abortListener, { once: true })
+              permissionService.registerExternalPermissionRequest(permissionRequest, (result) => {
+                abortSignal.removeEventListener('abort', abortListener)
+                if (result.behavior === 'allow') {
+                  resolve({ confirmed: true })
+                } else {
+                  resolve({ cancelled: true, reason: result.message })
+                }
+              })
+              this.eventBus.emit(sessionId, {
+                kind: 'proma_event',
+                event: { type: 'permission_request', request: permissionRequest },
+              })
+            })
+          }
+
           const permission = permissionService.createCanUseTool(
             sessionId,
             (permissionRequest: PermissionRequest) => {
@@ -682,9 +931,11 @@ export class AgentOrchestrator {
     streamStartedAt: number,
     releaseActiveRun: () => void,
   ): Promise<void> {
-    const { sessionId, userMessage, modelId, workspaceId } = input
+    const { sessionId, userMessage, modelId, workspaceId, additionalDirectories, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds } = input
     const runStartedAt = Date.now()
     let agentCwd = homedir()
+    let workspace: import('@proma/shared').AgentWorkspace | undefined
+    let workspaceSlug: string | undefined
     const piExtensionUiAbortController = new AbortController()
     this.piExtensionUiAbortControllers.set(sessionId, piExtensionUiAbortController)
     const channel = input.channelId ? getChannelById(input.channelId) : undefined
@@ -703,11 +954,119 @@ export class AgentOrchestrator {
     })
 
     if (workspaceId) {
-      const workspace = getAgentWorkspace(workspaceId)
-      if (workspace) {
-        agentCwd = getAgentSessionWorkspacePath(workspace.slug, sessionId)
+      const ws = getAgentWorkspace(workspaceId)
+      if (ws) {
+        workspace = ws
+        workspaceSlug = ws.slug
+        agentCwd = getAgentSessionWorkspacePath(ws.slug, sessionId)
       }
     }
+    const sessionMeta = getAgentSessionMeta(sessionId)
+    const initialPermissionMode: PromaPermissionMode = permissionModeOverride
+      ?? sessionMeta?.permissionMode
+      ?? PROMA_DEFAULT_PERMISSION_MODE
+    this.sessionPermissionModes.set(sessionId, initialPermissionMode)
+
+    const attachedDirectories = collectAttachedDirectories({
+      extraDirs: additionalDirectories,
+      sessionMeta,
+      workspaceSlug,
+    })
+    const piRuntimeSkillPaths = getPiRuntimeSkillPaths(workspaceSlug)
+    const piPermissionExtensionPath = ensurePiPermissionExtension({
+      configDir: piRuntimeConfig.configDir,
+      permissionMode: initialPermissionMode,
+      allowedDirectories: [agentCwd, ...attachedDirectories, ...piRuntimeSkillPaths],
+    })
+    console.log(`[Agent 编排] Pi 权限模式: ${initialPermissionMode}，已加载 Proma 权限扩展，Skills: ${piRuntimeSkillPaths.length}`)
+
+    const mcpConfig = workspaceSlug ? getWorkspaceMcpConfig(workspaceSlug) : { servers: {} }
+    const enabledMcpServers = Object.entries(mcpConfig.servers ?? {})
+      .filter(([name, entry]) => name !== 'memos-cloud' && entry.enabled)
+      .map(([name]) => name)
+    const piMcpExtensionPath = ensurePiMcpExtension({
+      configDir: piRuntimeConfig.configDir,
+      servers: Object.fromEntries(
+        Object.entries(mcpConfig.servers ?? {}).filter(([name]) => name !== 'memos-cloud'),
+      ),
+    })
+    const piMcpBridgeToolNames = enabledMcpServers.flatMap((name) => [
+      buildPiMcpBridgeListToolsToolName(name),
+      buildPiMcpBridgeToolName(name),
+    ])
+    const piMemoryExtension = ensurePiMemoryExtension({
+      configDir: piRuntimeConfig.configDir,
+      memoryConfig: getMemoryConfig(),
+    })
+    const piNanoBananaExtension = ensurePiNanoBananaExtension({
+      configDir: piRuntimeConfig.configDir,
+      sessionId,
+      cwd: agentCwd,
+      toolState: getToolState('nano-banana'),
+      credentials: getToolCredentials('nano-banana'),
+    })
+    const piTaskExtension = ensurePiTaskExtension({
+      configDir: piRuntimeConfig.configDir,
+    })
+    const piRuntimeExtensionPaths = [
+      piPermissionExtensionPath,
+      piTaskExtension.extensionPath,
+      ...(piMemoryExtension ? [piMemoryExtension.extensionPath] : []),
+      ...(piNanoBananaExtension ? [piNanoBananaExtension.extensionPath] : []),
+      ...(piMcpExtensionPath ? [piMcpExtensionPath] : []),
+      ensurePiGitCheckpointExtension({ configDir: piRuntimeConfig.configDir }),
+    ]
+    const enabledSkills = workspaceSlug
+      ? getWorkspaceSkills(workspaceSlug).filter((skill) => skill.enabled)
+      : []
+
+    const referencedSessionsBlock = buildReferencedSessionsPrompt(sessionId, mentionedSessionIds, workspaceId)
+    let enrichedUserMessage = userMessage
+    if (referencedSessionsBlock) {
+      enrichedUserMessage = `${referencedSessionsBlock}\n\n${enrichedUserMessage}`
+      console.log(`[Agent 编排] Pi 注入 referenced_sessions: ${mentionedSessionIds?.length ?? 0} sessions`)
+    }
+    const mentionedPiSkillsBlock = buildMentionedPiSkillsBlock({
+      mentionedSkills,
+      skillSearchDirs: piRuntimeSkillPaths,
+    })
+    if (mentionedPiSkillsBlock) {
+      enrichedUserMessage = `${mentionedPiSkillsBlock}\n\n${enrichedUserMessage}`
+      console.log(`[Agent 编排] Pi 展开 mentioned Skills: ${mentionedSkills?.length ?? 0}`)
+    }
+    if (mentionedSkills?.length || mentionedMcpServers?.length) {
+      const boundaryLines: string[] = ['用户在消息中明确引用了以下能力，请按 Pi 当前边界处理：']
+      for (const slug of mentionedSkills ?? []) {
+        boundaryLines.push(`- Skill: ${slug}（已通过 Pi 原生 --skill loader 暴露；若上方 <mentioned_pi_skills> 已包含该 Skill 正文，请直接遵循其指令；不要声称它是 Claude SDK Skill 调用）`)
+      }
+      for (const name of mentionedMcpServers ?? []) {
+        boundaryLines.push(`- MCP 服务器: ${name}（优先使用逐工具 ${buildPiMcpBridgeRemoteToolPattern(name)}；若逐工具不可见或不确定工具名，可先用 ${buildPiMcpBridgeListToolsToolName(name)} 查看工具，再通过 ${buildPiMcpBridgeToolName(name)} 调用；这不是 Claude SDK MCP 深度注入）`)
+      }
+      enrichedUserMessage = `<mentioned_capabilities>\n${boundaryLines.join('\n')}\n</mentioned_capabilities>\n\n${enrichedUserMessage}`
+      console.log(`[Agent 编排] Pi 注入 mentioned_capabilities: ${mentionedSkills?.length ?? 0} skills, ${mentionedMcpServers?.length ?? 0} MCP`)
+    }
+    const dynamicCtx = buildDynamicContext({
+      workspaceName: workspace?.name,
+      workspaceSlug,
+      agentCwd,
+    })
+    const piCapabilityPrompt = buildPiCapabilityBoundaryPrompt({
+      userMessage: `${dynamicCtx}\n\n${enrichedUserMessage}`,
+      workspaceName: workspace?.name,
+      workspaceSlug,
+      workspacePath: workspaceSlug ? getAgentWorkspacePath(workspaceSlug) : undefined,
+      mcpConfigPath: workspaceSlug ? getWorkspaceMcpPath(workspaceSlug) : undefined,
+      skillsDir: workspaceSlug ? getWorkspaceSkillsDir(workspaceSlug) : undefined,
+      piSkillPaths: piRuntimeSkillPaths,
+      enabledMcpServers,
+      piMcpBridgeToolNames,
+      piBuiltinMcpToolNames: [
+        ...piTaskExtension.toolNames,
+        ...(piMemoryExtension?.toolNames ?? []),
+        ...(piNanoBananaExtension?.toolNames ?? []),
+      ],
+      enabledSkills,
+    })
 
     const accumulatedMessages: SDKMessage[] = []
     let capturedResultSubtype: string | undefined
@@ -735,7 +1094,7 @@ export class AgentOrchestrator {
       for await (const msg of this.adapter.query({
         sessionId,
         prompt: buildPiRuntimePrompt({
-          userMessage,
+          userMessage: piCapabilityPrompt,
           modelId,
           provider: piRuntimeConfig.provider,
         }),
@@ -743,7 +1102,14 @@ export class AgentOrchestrator {
         cwd: agentCwd,
         provider: piRuntimeConfig.provider,
         runtimeSessionDir: piRuntimeConfig.sessionDir,
-        runtimeEnv: piRuntimeConfig.runtimeEnv,
+        runtimeSessionPath: sessionMeta?.forkSourcePiSessionPath,
+        runtimeExtensionPaths: piRuntimeExtensionPaths,
+        runtimeSkillPaths: piRuntimeSkillPaths,
+        runtimeEnv: {
+          ...piRuntimeConfig.runtimeEnv,
+          ...(piMemoryExtension?.env ?? {}),
+          ...(piNanoBananaExtension?.env ?? {}),
+        },
         abortSignal: piExtensionUiAbortController.signal,
         handleExtensionUiRequest: this.createPiExtensionUiHandler(sessionId, piExtensionUiAbortController.signal),
       })) {
@@ -794,6 +1160,7 @@ export class AgentOrchestrator {
       piExtensionUiAbortController.abort()
       this.piExtensionUiAbortControllers.delete(sessionId)
       this.adapter.abort(sessionId)
+      this.sessionPermissionModes.delete(sessionId)
       permissionService.clearSessionPending(sessionId)
       exitPlanService.clearSessionPending(sessionId)
     }
@@ -2404,6 +2771,91 @@ export class AgentOrchestrator {
   }
 
   /**
+   * 克隆活跃 runtime 的当前原生会话分支。
+   *
+   * 目前主要用于 Pi session tree parity：adapter 负责向运行中的 Pi RPC
+   * 发送 clone 命令，Proma service 再把返回值落成新的 Proma 会话元数据。
+   */
+  async cloneActiveRuntimeSession(sessionId: string): Promise<{ sessionId?: string; sessionPath?: string }> {
+    if (!this.adapter.clone) {
+      throw new Error('当前 Agent 引擎不支持 runtime clone')
+    }
+
+    const result = await this.adapter.clone(sessionId)
+    if (result.cancelled) {
+      throw new Error('Pi runtime clone 已取消')
+    }
+
+    return {
+      sessionId: result.sessionId,
+      sessionPath: result.sessionPath,
+    }
+  }
+
+  /**
+   * 在活跃 runtime 中从指定 entry 创建原生 fork。
+   *
+   * Pi runtime fork 的返回结构可能随版本携带 sessionPath/sessionId，也可能只返回
+   * 展示文本；service 层会吸收可用元数据，缺失时保留 Proma 层 fork fallback。
+   */
+  async forkActiveRuntimeSession(sessionId: string, entryId: string): Promise<{ sessionId?: string; sessionPath?: string }> {
+    const trimmedEntryId = entryId.trim()
+    if (!trimmedEntryId) {
+      throw new Error('runtime fork entryId 不能为空')
+    }
+    if (!this.adapter.fork) {
+      throw new Error('当前 Agent 引擎不支持 runtime fork')
+    }
+
+    const result = await this.adapter.fork(sessionId, trimmedEntryId)
+    if (result.cancelled) {
+      throw new Error('Pi runtime fork 已取消')
+    }
+
+    return {
+      sessionId: typeof result.sessionId === 'string' ? result.sessionId : undefined,
+      sessionPath: typeof result.sessionPath === 'string' ? result.sessionPath : undefined,
+    }
+  }
+
+  /**
+   * 切换活跃 runtime 到指定原生 session 文件。
+   *
+   * 目前用于 Pi session tree parity：Proma 会把成功切换的 native
+   * session path 持久化到当前会话元数据，后续重新运行可用 --session 恢复。
+   */
+  async switchActiveRuntimeSession(sessionId: string, sessionPath: string): Promise<{ sessionPath: string }> {
+    const trimmedSessionPath = sessionPath.trim()
+    if (!trimmedSessionPath) {
+      throw new Error('runtime sessionPath 不能为空')
+    }
+
+    if (!this.adapter.switchSession) {
+      throw new Error('当前 Agent 引擎不支持 runtime switch_session')
+    }
+
+    const result = await this.adapter.switchSession(sessionId, trimmedSessionPath)
+    if (result.cancelled) {
+      throw new Error('Pi runtime switch_session 已取消')
+    }
+
+    return { sessionPath: trimmedSessionPath }
+  }
+
+  /**
+   * 获取活跃 runtime 当前消息快照。
+   *
+   * Pi RPC 用于运行中同步原生 session 历史；Claude SDK 当前没有等价接口。
+   */
+  async getActiveRuntimeMessages(sessionId: string): Promise<SDKMessage[]> {
+    if (!this.adapter.getMessages) {
+      throw new Error('当前 Agent 引擎不支持 runtime get_messages')
+    }
+
+    return this.adapter.getMessages(sessionId)
+  }
+
+  /**
    * 运行中动态切换会话的权限模式
    *
    * 同时更新 Proma 侧（canUseTool 闭包读取的 Map）和 SDK 侧（query.setPermissionMode）。
@@ -2441,6 +2893,50 @@ export class AgentOrchestrator {
     }
 
     const sessionMeta = getAgentSessionMeta(sessionId)
+    if (this.engine === 'pi' || (sessionMeta && resolveExistingSessionAgentEngine({ session: sessionMeta }) === 'pi')) {
+      const kept = truncateSDKMessages(sessionId, assistantMessageUuid)
+      let nativeRewindPath: string | undefined
+      let piGitCheckpoint: ReturnType<typeof findPiGitCheckpointForEntry> = null
+      if (sessionMeta) {
+        try {
+          const nativeRewind = createPiNativeRewindSession({
+            sourceMeta: sessionMeta,
+            targetEntryId: assistantMessageUuid,
+          })
+          if (nativeRewind) {
+            nativeRewindPath = nativeRewind.rewindPiSessionPath
+            updateAgentSessionMeta(sessionId, {
+              forkSourcePiSessionId: nativeRewind.sourcePiSessionId,
+              forkSourcePiSessionPath: nativeRewind.rewindPiSessionPath,
+            })
+            console.log(`[Agent 编排] 已准备 Pi 原生回退分支，下次运行将从该分支恢复: ${nativeRewind.rewindPiSessionPath}`)
+            piGitCheckpoint = findPiGitCheckpointForEntry(nativeRewind.rewindPiSessionPath, assistantMessageUuid)
+              ?? findPiGitCheckpointForEntry(nativeRewind.sourcePiSessionPath, assistantMessageUuid)
+          }
+        } catch (error) {
+          console.warn('[Agent 编排] 创建 Pi 原生回退分支失败，保留 Proma 层回退:', error)
+        }
+      }
+
+      const fileRewindResult = {
+        canRewind: false,
+        error: piGitCheckpoint
+          ? 'Proma 已找到 Pi git checkpoint，但当前版本不会自动恢复文件；会话消息历史已回退，并准备了下次运行使用的 Pi 原生回退分支，文件系统保持当前状态。'
+          : nativeRewindPath
+            ? 'Pi runtime 暂不支持 Claude SDK 文件快照回退；Proma 已回退会话消息历史，并准备了下次运行使用的 Pi 原生回退分支，文件系统保持当前状态。'
+            : 'Pi runtime 暂不支持 Claude SDK 文件快照回退；Proma 已回退会话消息历史，文件系统保持当前状态。',
+        filesChanged: [],
+        ...(piGitCheckpoint ? { checkpoint: piGitCheckpoint } : {}),
+      }
+
+      console.log(`[Agent 编排] Pi 回退完成: sessionId=${sessionId}, 保留 ${kept.length} 条消息，文件快照回退暂不可用${nativeRewindPath ? `, native=${nativeRewindPath}` : ''}`)
+
+      return {
+        remainingMessages: kept.length,
+        fileRewind: fileRewindResult,
+      }
+    }
+
     if (!sessionMeta?.sdkSessionId) {
       throw new Error('会话没有 SDK session ID，无法回退')
     }

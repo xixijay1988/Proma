@@ -755,27 +755,28 @@ export function AssistantTurnRenderer({ turn, allMessages, historicalTaskSubject
           .filter((b) => b.type === 'text' && 'text' in b)
           .map((b) => (b as { text: string }).text)
           .join('\n\n')
-        // 仅取主线 assistant 消息的 uuid 作为 fork/rewind 截断点。
+        // 仅取主线 assistant 消息的运行时标识作为 fork/rewind 截断点。
         // SDK forkSession 内部会过滤掉 sidechain（parent_tool_use_id 非空的子代理消息），
         // 若把子代理 uuid 传过去会触发 "Message <uuid> not found in session" 错误。
         const mainlineAssistants = turn.assistantMessages.filter((m) => !m.parent_tool_use_id)
-        const lastUuid = mainlineAssistants.length > 0
+        const lastRuntimeMessageId = mainlineAssistants.length > 0
           ? mainlineAssistants[mainlineAssistants.length - 1]?.uuid
+            ?? mainlineAssistants[mainlineAssistants.length - 1]?._promaPiEntryId
           : undefined
-        const hasActions = !!(textContent || (onFork && lastUuid) || (onRewind && lastUuid))
+        const hasActions = !!(textContent || (onFork && lastRuntimeMessageId) || (onRewind && lastRuntimeMessageId))
         const hasDuration = durationMs != null
         if (!hasDuration && !hasActions && !showStoppedBadge) return null
         return (
           <MessageActions className="pl-[46px] mt-0.5 min-h-[28px] justify-start">
             {hasDuration && <DurationBadge durationMs={durationMs!} usage={usage} />}
             {textContent && <CopyButton content={textContent} />}
-            {onFork && lastUuid && (
-              <MessageAction tooltip="从此处分叉" onClick={() => onFork(lastUuid)}>
+            {onFork && lastRuntimeMessageId && (
+              <MessageAction tooltip="从此处分叉" onClick={() => onFork(lastRuntimeMessageId)}>
                 <Split className="size-3.5" />
               </MessageAction>
             )}
-            {onRewind && lastUuid && (
-              <MessageAction tooltip="回退到此处" onClick={() => onRewind(lastUuid)}>
+            {onRewind && lastRuntimeMessageId && (
+              <MessageAction tooltip="回退到此处" onClick={() => onRewind(lastRuntimeMessageId)}>
                 <Undo2 className="size-3.5" />
               </MessageAction>
             )}

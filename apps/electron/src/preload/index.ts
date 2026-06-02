@@ -32,6 +32,7 @@ import type {
   RecentMessagesResult,
   MessageSearchResult,
   AgentSessionMeta,
+  PiNativeSessionSummary,
   AgentEngine,
   SDKMessage,
   AgentSendInput,
@@ -82,8 +83,15 @@ import type {
   ChatToolMeta,
   MoveSessionToWorkspaceInput,
   ForkSessionInput,
+  SwitchActiveSessionInput,
+  SetPiSessionFileInput,
+  LoadPiNativeSessionMessagesInput,
+  SyncPiNativeSessionMessagesInput,
+  SyncPiNativeSessionMessagesResult,
   RewindSessionInput,
   RewindSessionResult,
+  ApplyPiGitCheckpointInput,
+  ApplyPiGitCheckpointResult,
   AgentMessageSearchResult,
   AgentSessionReferenceSearchInput,
   AgentSessionReferenceSearchResult,
@@ -444,8 +452,29 @@ export interface ElectronAPI {
   /** 分叉 Agent 会话 */
   forkAgentSession: (input: ForkSessionInput) => Promise<AgentSessionMeta>
 
+  /** 克隆活跃 runtime 会话 */
+  cloneActiveAgentSession: (sessionId: string) => Promise<AgentSessionMeta>
+
+  /** 切换活跃 runtime 原生会话 */
+  switchActiveAgentSession: (input: SwitchActiveSessionInput) => Promise<AgentSessionMeta>
+
+  /** 设置 Pi 原生会话文件供下次运行恢复 */
+  setPiSessionFileForNextRun: (input: SetPiSessionFileInput) => Promise<AgentSessionMeta>
+
+  /** 列出 Pi 原生 session JSONL 摘要 */
+  listPiNativeSessions: () => Promise<PiNativeSessionSummary[]>
+
+  /** 读取 Pi 原生 session 历史并转换为 Proma SDKMessage */
+  loadPiNativeSessionMessages: (input: LoadPiNativeSessionMessagesInput) => Promise<SDKMessage[]>
+
+  /** 将 Pi 原生 session 历史同步写入 Proma 会话 */
+  syncPiNativeSessionMessages: (input: SyncPiNativeSessionMessagesInput) => Promise<SyncPiNativeSessionMessagesResult>
+
   /** 快照回退（同一会话内回退到指定点，恢复文件 + 截断对话） */
   rewindSession: (input: RewindSessionInput) => Promise<RewindSessionResult>
+
+  /** 应用 Pi git checkpoint（显式恢复文件） */
+  applyPiGitCheckpoint: (input: ApplyPiGitCheckpointInput) => Promise<ApplyPiGitCheckpointResult>
 
   /** 生成 Agent 会话标题 */
   generateAgentTitle: (input: AgentGenerateTitleInput) => Promise<string | null>
@@ -626,6 +655,9 @@ export interface ElectronAPI {
 
   /** 打开文件夹选择对话框 */
   openFolderDialog: () => Promise<{ path: string; name: string } | null>
+
+  /** 打开 Pi native session JSONL 文件选择对话框（只返回路径，不读取内容） */
+  openPiSessionFileDialog: () => Promise<string | null>
 
   /** 附加外部目录到 Agent 会话 */
   attachDirectory: (input: AgentAttachDirectoryInput) => Promise<string[]>
@@ -1410,8 +1442,36 @@ const electronAPI: ElectronAPI = {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.FORK_SESSION, input)
   },
 
+  cloneActiveAgentSession: (sessionId: string) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.CLONE_ACTIVE_SESSION, sessionId)
+  },
+
+  switchActiveAgentSession: (input: SwitchActiveSessionInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SWITCH_ACTIVE_SESSION, input)
+  },
+
+  setPiSessionFileForNextRun: (input: SetPiSessionFileInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SET_PI_SESSION_FILE_FOR_NEXT_RUN, input)
+  },
+
+  listPiNativeSessions: () => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LIST_PI_NATIVE_SESSIONS)
+  },
+
+  loadPiNativeSessionMessages: (input: LoadPiNativeSessionMessagesInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.LOAD_PI_NATIVE_SESSION_MESSAGES, input)
+  },
+
+  syncPiNativeSessionMessages: (input: SyncPiNativeSessionMessagesInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.SYNC_PI_NATIVE_SESSION_MESSAGES, input)
+  },
+
   rewindSession: (input: RewindSessionInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.REWIND_SESSION, input)
+  },
+
+  applyPiGitCheckpoint: (input: ApplyPiGitCheckpointInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.APPLY_PI_GIT_CHECKPOINT, input)
   },
 
   generateAgentTitle: (input: AgentGenerateTitleInput) => {
@@ -1680,6 +1740,10 @@ const electronAPI: ElectronAPI = {
 
   openFolderDialog: () => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_FOLDER_DIALOG)
+  },
+
+  openPiSessionFileDialog: () => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.OPEN_PI_SESSION_FILE_DIALOG)
   },
 
   attachDirectory: (input: AgentAttachDirectoryInput) => {

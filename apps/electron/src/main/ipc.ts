@@ -42,7 +42,12 @@ import type {
   FileDialogResult,
   RecentMessagesResult,
   AgentSessionMeta,
+  PiNativeSessionSummary,
+  LoadPiNativeSessionMessagesInput,
+  SyncPiNativeSessionMessagesInput,
+  SyncPiNativeSessionMessagesResult,
   AgentEngine,
+  SDKMessage,
   AgentSendInput,
   AgentWorkspace,
   AgentWorkspaceCreateInput,
@@ -85,8 +90,12 @@ import type {
   ChatToolMeta,
   MoveSessionToWorkspaceInput,
   ForkSessionInput,
+  SwitchActiveSessionInput,
+  SetPiSessionFileInput,
   RewindSessionInput,
   RewindSessionResult,
+  ApplyPiGitCheckpointInput,
+  ApplyPiGitCheckpointResult,
   AgentSessionReferenceSearchInput,
   FeishuConfigInput,
   FeishuConfig,
@@ -104,7 +113,6 @@ import type {
   DingTalkTestResult,
   WeChatConfig,
   WeChatBridgeState,
-  SDKMessage,
   GetFileDiffInput,
   DetachedPreviewWindowInput,
   RevertFileInput,
@@ -169,14 +177,16 @@ import {
   updateAgentSessionMeta,
   deleteAgentSession,
   migrateChatToAgentSession,
+  listPiNativeSessions,
+  loadPiNativeSessionSDKMessages,
   moveSessionToWorkspace,
-  forkAgentSession,
   autoArchiveAgentSessions,
   searchAgentSessionMessages,
   searchAgentSessionReferences,
+  getAgentTaskOutput,
 } from './lib/agent-session-manager'
-import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession } from './lib/agent-service'
-import { resolveExistingSessionAgentEngine } from './lib/agent-engine'
+import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, forkAgentSession, cloneActiveAgentSession, switchActiveAgentSession, setPiSessionFileForNextRun, syncPiNativeSessionMessages, applyPiGitCheckpointForSession } from './lib/agent-service'
+import { assertAgentSessionForkSupported } from './lib/agent-session-capabilities'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
 import { exitPlanService } from './lib/agent-exit-plan-service'
@@ -706,14 +716,6 @@ if let appUrl = NSWorkspace.shared.urlForApplication(toOpen: url) {
 function cacheNull(key: string): null {
   defaultAppCache.set(key, null)
   return null
-}
-
-function assertAgentSessionForkSupported(sessionId: string): void {
-  const session = getAgentSessionMeta(sessionId)
-  const engine = resolveExistingSessionAgentEngine({ session })
-  if (engine === 'pi') {
-    throw new Error('Pi Agent RPC experimental 暂不支持会话分叉。请在 Claude SDK 工作区中使用该功能。')
-  }
 }
 
 /**
@@ -1770,6 +1772,54 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  // 克隆活跃 runtime 会话（当前用于 Pi 原生 session tree）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.CLONE_ACTIVE_SESSION,
+    async (_, sessionId: string): Promise<AgentSessionMeta> => {
+      return cloneActiveAgentSession(sessionId)
+    }
+  )
+
+  // 切换活跃 runtime 原生会话文件（当前用于 Pi 原生 session tree）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.SWITCH_ACTIVE_SESSION,
+    async (_, input: SwitchActiveSessionInput): Promise<AgentSessionMeta> => {
+      return switchActiveAgentSession(input)
+    }
+  )
+
+  // 设置 Pi 原生会话文件，供下次启动 runtime 时恢复
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.SET_PI_SESSION_FILE_FOR_NEXT_RUN,
+    async (_, input: SetPiSessionFileInput): Promise<AgentSessionMeta> => {
+      return setPiSessionFileForNextRun(input)
+    }
+  )
+
+  // 列出 Pi 原生 session JSONL 摘要，供后续 session browser 使用
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.LIST_PI_NATIVE_SESSIONS,
+    async (): Promise<PiNativeSessionSummary[]> => {
+      return listPiNativeSessions()
+    }
+  )
+
+  // 读取 Pi 原生 session 历史并转换为 Proma SDKMessage（不写入 Proma 会话）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.LOAD_PI_NATIVE_SESSION_MESSAGES,
+    async (_, input: LoadPiNativeSessionMessagesInput): Promise<SDKMessage[]> => {
+      return loadPiNativeSessionSDKMessages(input.sessionPath, input.sessionId, input.leafEntryId)
+    }
+  )
+
+  // 将 Pi 原生 session 历史同步写入 Proma 会话（按 _promaPiEntryId 去重）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.SYNC_PI_NATIVE_SESSION_MESSAGES,
+    async (_, input: SyncPiNativeSessionMessagesInput): Promise<SyncPiNativeSessionMessagesResult> => {
+      return syncPiNativeSessionMessages(input)
+    }
+  )
+
   // 快照回退（同一会话内回退到指定点）
   ipcMain.handle(
     AGENT_IPC_CHANNELS.REWIND_SESSION,
@@ -1778,6 +1828,14 @@ export function registerIpcHandlers(): void {
         input.sessionId,
         input.assistantMessageUuid,
       )
+    }
+  )
+
+  // 应用 Pi git checkpoint（显式恢复文件）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.APPLY_PI_GIT_CHECKPOINT,
+    async (_, input: ApplyPiGitCheckpointInput): Promise<ApplyPiGitCheckpointResult> => {
+      return applyPiGitCheckpointForSession(input)
     }
   )
 
@@ -2016,17 +2074,12 @@ export function registerIpcHandlers(): void {
 
   // ===== Agent 后台任务管理 =====
 
-  // 获取任务输出（保留接口，供未来扩展）
+  // 获取任务输出
   ipcMain.handle(
     AGENT_IPC_CHANNELS.GET_TASK_OUTPUT,
     async (_, input: GetTaskOutputInput): Promise<GetTaskOutputResult> => {
       try {
-        // TODO: 实现通过 SDK 的 TaskOutput 获取任务输出
-        console.warn('[IPC] GET_TASK_OUTPUT: 当前版本暂未实现，返回空输出')
-        return {
-          output: '',
-          isComplete: false,
-        }
+        return getAgentTaskOutput(input)
       } catch (error) {
         console.error('[IPC] 获取任务输出失败:', error)
         throw error
@@ -2382,6 +2435,27 @@ export function registerIpcHandlers(): void {
       const folderPath = result.filePaths[0]!
       const name = folderPath.split('/').filter(Boolean).pop() || 'folder'
       return { path: folderPath, name }
+    }
+  )
+
+  // 打开 Pi native session JSONL 文件选择对话框（只返回路径，不读取内容）
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.OPEN_PI_SESSION_FILE_DIALOG,
+    async (): Promise<string | null> => {
+      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+      if (!win) return null
+
+      const result = await dialog.showOpenDialog(win, {
+        properties: ['openFile'],
+        title: '选择 Pi native session 文件',
+        filters: [
+          { name: 'Pi session JSONL', extensions: ['jsonl'] },
+          { name: '所有文件', extensions: ['*'] },
+        ],
+      })
+
+      if (result.canceled || result.filePaths.length === 0) return null
+      return result.filePaths[0] ?? null
     }
   )
 

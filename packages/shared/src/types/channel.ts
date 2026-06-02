@@ -77,6 +77,39 @@ export function isAgentCompatibleProvider(provider: ProviderType): boolean {
 }
 
 /**
+ * Pi runtime 已有 provider 映射的供应商类型。
+ *
+ * Claude SDK 仍只允许 Anthropic 协议兼容 provider；Pi Agent RPC 可以通过
+ * `models.json` + provider env 映射接入 OpenAI-compatible 等更多渠道。
+ */
+export const PI_AGENT_COMPATIBLE_PROVIDERS: ReadonlySet<ProviderType> = new Set<ProviderType>([
+  'anthropic',
+  'openai',
+  'deepseek',
+  'google',
+  'kimi-api',
+  'kimi-coding',
+  'zhipu',
+  'minimax',
+  'doubao',
+  'qwen',
+  'custom',
+])
+
+/**
+ * 按底层 Agent 引擎判断渠道是否可用于 Agent。
+ */
+export function isProviderCompatibleWithAgentEngine(
+  engine: import('./agent').AgentEngine,
+  provider: ProviderType,
+): boolean {
+  if (engine === 'pi') {
+    return PI_AGENT_COMPATIBLE_PROVIDERS.has(provider)
+  }
+  return isAgentCompatibleProvider(provider)
+}
+
+/**
  * 渠道中的模型配置
  */
 export interface ChannelModel {

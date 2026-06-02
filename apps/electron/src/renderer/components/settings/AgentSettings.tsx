@@ -226,7 +226,7 @@ export function AgentSettings(): React.ReactElement {
   const buildMcpPrompt = (): string => {
     const configPath = `~/${configDirName}/agent-workspaces/${workspaceSlug}/mcp.json`
     const currentConfig = JSON.stringify(mcpConfig, null, 2)
-    return `请帮我配置当前工作区的 MCP 服务器，你要主动来帮我实现，你可以采用联网搜索深度研究来尝试，当前环境已经有 Claude Agent SDK 了，除非不确定的时候才来问我，否则默认将帮我完成安装，而不是指导我。
+    return `请帮我配置当前工作区的 MCP 服务器，你要主动来帮我实现，你可以采用联网搜索深度研究来尝试。当前工作区使用 ${currentWorkspace.agentEngine === 'pi' ? 'Pi Agent RPC experimental；Proma 会通过 MCP bridge 将 MCP 工具暴露为 Pi 逐工具调用，并保留 list/call 兜底' : 'Claude Agent SDK'}，除非不确定的时候才来问我，否则默认将帮我完成安装，而不是指导我。
 
 ## 工作区信息
 - 工作区: ${currentWorkspace.name}
@@ -264,7 +264,7 @@ mcp.json 格式如下：
     const skillList = skills.length > 0
       ? skills.map((s) => `- ${s.name}: ${s.description ?? '无描述'}`).join('\n')
       : '暂无 Skill'
-    return `请帮我配置当前工作区的 Skills，你要主动来帮我实现，你可以采用联网搜索深度研究来尝试，当前环境已经有 Claude Agent SDK 了，除非不确定的时候才来问我，否则默认将帮我完成安装，而不是指导我。
+    return `请帮我配置当前工作区的 Skills，你要主动来帮我实现，你可以采用联网搜索深度研究来尝试。当前工作区使用 ${currentWorkspace.agentEngine === 'pi' ? 'Pi Agent RPC experimental；Proma 会通过 Pi 原生 --skill loader 加载当前工作区 Skills' : 'Claude Agent SDK'}，除非不确定的时候才来问我，否则默认将帮我完成安装，而不是指导我。
 
 ## 工作区信息
 - 工作区: ${currentWorkspace.name}
@@ -450,6 +450,11 @@ ${skillList}
               </SelectContent>
             </Select>
           </SettingsRow>
+          {currentWorkspace.agentEngine === 'pi' && (
+            <div className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-700 dark:text-amber-300">
+              Pi Agent RPC 目前使用 Proma 权限扩展接管工具确认；Skills 会通过 Pi 原生 --skill loader 加载，MCP 会通过 Proma MCP bridge 优先暴露为 Pi 逐工具调用，并保留服务器级 list/call 兜底。
+            </div>
+          )}
         </SettingsCard>
       </SettingsSection>
 

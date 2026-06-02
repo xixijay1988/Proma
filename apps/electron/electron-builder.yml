@@ -23,6 +23,8 @@ asar: true
 asarUnpack:
   - "node_modules/@anthropic-ai/**"
   - "node_modules/@earendil-works/**"
+  - "node_modules/@modelcontextprotocol/**"
+  - "node_modules/typebox/**"
 
 # 跳过 npm install（代码已被 esbuild/Vite 打包，npm 不识别 workspace:* 协议）
 npmRebuild: false
@@ -42,10 +44,25 @@ files:
   # 宿主平台上 os/cpu 不匹配的包会被 bun 跳过安装，打包时 electron-builder 会对不存在的 glob 静默跳过。
   - node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/**/*
   - node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64/**/*
+  - node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64/**/*
+  - node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/**/*
   - node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/**/*
   # Pi experimental engine 通过独立 CLI 进程桥接，需要保留 scoped package 及其
   # 包内依赖树，并配合 asarUnpack 确保运行时可 spawn。
   - node_modules/@earendil-works/**/*
+  # Pi MCP bridge extension 在 Pi 子进程中直接加载 MCP SDK client，
+  # 需要保留 SDK 及其客户端传输依赖，不能只依赖 esbuild 打入 main.cjs。
+  - node_modules/@modelcontextprotocol/sdk/**/*
+  - node_modules/typebox/**/*
+  - node_modules/cross-spawn/**/*
+  - node_modules/eventsource/**/*
+  - node_modules/eventsource-parser/**/*
+  - node_modules/zod/**/*
+  - node_modules/content-type/**/*
+  - node_modules/raw-body/**/*
+  - node_modules/bytes/**/*
+  - node_modules/iconv-lite/**/*
+  - node_modules/unpipe/**/*
   # PDF 内联预览使用本地 PDF.js 资源，避免运行时依赖 CDN。
   - node_modules/pdfjs-dist/**/*
   # 排除 workspace 包的 symlink（代码已被 esbuild/Vite 打包到 dist/ 中）

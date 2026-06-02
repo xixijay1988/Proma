@@ -17,7 +17,7 @@ import * as React from 'react'
 import { unstable_batchedUpdates } from 'react-dom'
 import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Map as MapIcon, Sparkles, Eye } from 'lucide-react'
+import { Bot, CornerDownLeft, Square, Settings, Paperclip, FolderPlus, X, Copy, Check, Brain, Map as MapIcon, Sparkles, Eye, GitBranch, FileJson, RefreshCw, Download } from 'lucide-react'
 import { AgentMessages } from './AgentMessages'
 import { AgentHeader } from './AgentHeader'
 import { ContextUsageBadge } from './ContextUsageBadge'
@@ -95,9 +95,19 @@ import { useOpenSession } from '@/hooks/useOpenSession'
 import { AgentSessionProvider } from '@/contexts/session-context'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
-import type { AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage, AgentEngine } from '@proma/shared'
+import type { AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage, AgentEngine, PiNativeSessionSummary, ApplyPiGitCheckpointResult } from '@proma/shared'
 import { DEFAULT_AGENT_ENGINE, MAX_ATTACHMENT_SIZE } from '@proma/shared'
 import { fileToBase64, formatFileNames, getFileParentPath } from '@/lib/file-utils'
+import {
+  formatPiNativeSessionCwd,
+  formatPiNativeSessionTime,
+  getPiNativeSessionDisplayTitle,
+} from './pi-native-session-ui.ts'
+import {
+  getAgentRuntimeSelectableChannelIds,
+  hasAgentRuntimeAvailableModel,
+  isAgentRuntimeSelectedModelAvailable,
+} from '@/lib/agent-runtime-channel-options'
 
 /** 稳定的空 SDKMessage 数组引用，避免 ?? [] 每次创建新引用 */
 const EMPTY_SDK_MESSAGES: SDKMessage[] = []
@@ -127,6 +137,180 @@ function createClipboardTextFile(text: string): File {
   const mediaType = isMarkdown ? 'text/markdown' : 'text/plain'
   const filename = `clipboard-${formatClipboardTimestamp()}.${extension}`
   return new File([text], filename, { type: mediaType })
+}
+
+function formatPiCheckpointRestoreDescription(result: ApplyPiGitCheckpointResult): string {
+  const files = result.filesChanged ?? []
+  if (files.length > 0) {
+    const preview = files.slice(0, 3).join('、')
+    const suffix = files.length > 3 ? ` 等 ${files.length} 个文件` : `${files.length} 个文件`
+    return `已恢复 ${suffix}：${preview}`
+  }
+  return result.checkpoint?.cwd ? `工作区：${result.checkpoint.cwd}` : '文件已按 Pi git checkpoint 恢复'
+}
+
+interface PiNativeSessionPopoverProps {
+  open: boolean
+  streaming: boolean
+  sessions: PiNativeSessionSummary[]
+  loading: boolean
+  onOpenChange: (open: boolean) => void
+  onRefresh: () => void
+  onSelectSession: (sessionPath: string) => void
+  onPreviewSession: (session: PiNativeSessionSummary) => void
+  onSyncSession: (session: PiNativeSessionSummary) => void
+  onSelectFile: () => void
+}
+
+function PiNativeSessionPopover({
+  open,
+  streaming,
+  sessions,
+  loading,
+  onOpenChange,
+  onRefresh,
+  onSelectSession,
+  onPreviewSession,
+  onSyncSession,
+  onSelectFile,
+}: PiNativeSessionPopoverProps): React.ReactElement {
+  return (
+    <Popover open={open} onOpenChange={onOpenChange}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-[36px] shrink-0 rounded-full text-amber-600 hover:bg-amber-500/10 hover:text-amber-700 dark:text-amber-300 dark:hover:text-amber-200"
+            >
+              <GitBranch className="size-4" />
+            </Button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          <p>{streaming ? '切换 Pi 原生会话' : '设置 Pi 原生会话文件'}</p>
+        </TooltipContent>
+      </Tooltip>
+      <PopoverContent
+        side="top"
+        align="start"
+        className="w-[360px] max-w-[calc(100vw-2rem)] p-2"
+        onOpenAutoFocus={(e) => e.preventDefault()}
+      >
+        <div className="flex items-center justify-between gap-3 px-1 pb-2">
+          <div className="min-w-0">
+            <div className="text-xs font-medium text-foreground">Pi 原生会话</div>
+            <div className="text-[11px] text-muted-foreground">
+              {streaming ? '运行中会立即切换 active session' : '空闲时设置为下次运行恢复'}
+            </div>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-7 shrink-0 rounded-full"
+            onClick={onRefresh}
+            disabled={loading}
+          >
+            <RefreshCw className={cn('size-3.5', loading && 'animate-spin')} />
+          </Button>
+        </div>
+
+        <div className="max-h-[280px] overflow-y-auto pr-1">
+          {loading && sessions.length === 0 ? (
+            <div className="px-2 py-6 text-center text-xs text-muted-foreground">正在读取 Pi session...</div>
+          ) : sessions.length === 0 ? (
+            <div className="px-2 py-6 text-center text-xs text-muted-foreground">还没有发现 Pi 原生 session</div>
+          ) : (
+            <div className="flex flex-col gap-1">
+              {sessions.map((session) => (
+                <button
+                  key={session.path}
+                  type="button"
+                  className="group flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-amber-500/10"
+                  onClick={() => onSelectSession(session.path)}
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="line-clamp-2 text-xs font-medium text-foreground">
+                      {getPiNativeSessionDisplayTitle(session)}
+                    </span>
+                    {session.lastMessagePreview && session.lastMessagePreview !== session.firstUserMessage && (
+                      <span className="mt-1 line-clamp-1 text-[11px] text-foreground/60">
+                        最近：{session.lastMessagePreview}
+                      </span>
+                    )}
+                    <span className="mt-1 flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground">
+                      <span className="truncate">{formatPiNativeSessionCwd(session.cwd)}</span>
+                      <span className="shrink-0">·</span>
+                      {session.branchEntryCount !== undefined && (
+                        <>
+                          <span className="shrink-0">branch {session.branchEntryCount}</span>
+                          <span className="shrink-0">·</span>
+                        </>
+                      )}
+                      <span className="shrink-0">{session.messageCount} 条</span>
+                      <span className="shrink-0">·</span>
+                      <span className="shrink-0">{formatPiNativeSessionTime(session.updatedAt)}</span>
+                    </span>
+                  </span>
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-70 transition hover:bg-background hover:text-foreground group-hover:opacity-100"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onPreviewSession(session)
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return
+                      event.preventDefault()
+                      event.stopPropagation()
+                      onPreviewSession(session)
+                    }}
+                  >
+                    <Eye className="size-3.5" />
+                  </span>
+                  {!streaming && (
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-70 transition hover:bg-background hover:text-foreground group-hover:opacity-100"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onSyncSession(session)
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== 'Enter' && event.key !== ' ') return
+                        event.preventDefault()
+                        event.stopPropagation()
+                        onSyncSession(session)
+                      }}
+                    >
+                      <Download className="size-3.5" />
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="mt-2 border-t border-border pt-2">
+          <Button
+            type="button"
+            variant="ghost"
+            className="h-8 w-full justify-start gap-2 rounded-md px-2 text-xs"
+            onClick={onSelectFile}
+          >
+            <FileJson className="size-3.5" />
+            选择 JSONL 文件...
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
 }
 
 interface SDKMessageRecord {
@@ -324,6 +508,9 @@ function DisplayOptionsPopover({
 
 export function AgentView({ sessionId }: { sessionId: string }): React.ReactElement {
   const [persistedSDKMessages, setPersistedSDKMessages] = React.useState<SDKMessage[]>([])
+  const [piSessionPopoverOpen, setPiSessionPopoverOpen] = React.useState(false)
+  const [piNativeSessions, setPiNativeSessions] = React.useState<PiNativeSessionSummary[]>([])
+  const [piNativeSessionsLoading, setPiNativeSessionsLoading] = React.useState(false)
   const setStreamingStates = useSetAtom(agentStreamingStatesAtom)
   // 按 sessionId 切片订阅：仅本 session 的 streaming state 变化才让 AgentView 重渲染。
   // 流式期间其他 session 的高频更新（每 token 一次）通过 base map atom 传播但派生
@@ -488,30 +675,47 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     pendingFilesRef.current = pendingFiles
   }, [pendingFiles])
 
-  // 渠道已选但模型未选时，自动选择第一个可用模型
+  // 渠道已选但模型未选或当前 runtime 不兼容时，自动选择第一个可用模型
   const globalChannels = useAtomValue(channelsAtom)
+
+  const selectableAgentChannelIds = React.useMemo(
+    () => getAgentRuntimeSelectableChannelIds(globalChannels, agentChannelIds, currentAgentEngine),
+    [globalChannels, agentChannelIds, currentAgentEngine],
+  )
 
   // 检查 Agent 渠道列表中是否存在可用的模型（渠道 enabled + 模型 enabled）
   const hasAvailableModel = React.useMemo(() => {
-    // Proma 官方渠道（商业版）：只要 enabled 且有可用模型，直接视为可用
-    const promaOfficial = globalChannels.find((c) => c.id === 'proma-official')
-    if (promaOfficial?.enabled && promaOfficial.models.some((m) => m.enabled)) return true
-    // 其他渠道：需在 agentChannelIds 白名单中
-    if (!agentChannelIds || agentChannelIds.length === 0) return false
-    return globalChannels.some(
-      (c) => c.enabled && agentChannelIds.includes(c.id) && c.models.some((m) => m.enabled),
-    )
-  }, [globalChannels, agentChannelIds])
-  React.useEffect(() => {
-    if (!agentChannelId || agentModelId) return
+    return hasAgentRuntimeAvailableModel(globalChannels, agentChannelIds, currentAgentEngine)
+  }, [globalChannels, agentChannelIds, currentAgentEngine])
 
-    const channel = globalChannels.find((c) => c.id === agentChannelId && c.enabled)
+  const selectedModelAvailable = React.useMemo(
+    () => isAgentRuntimeSelectedModelAvailable(
+      globalChannels,
+      agentChannelIds,
+      currentAgentEngine,
+      agentChannelId,
+      agentModelId,
+    ),
+    [globalChannels, agentChannelIds, currentAgentEngine, agentChannelId, agentModelId],
+  )
+  React.useEffect(() => {
+    if (selectedModelAvailable) return
+
+    const channel = globalChannels.find(
+      (candidate) => selectableAgentChannelIds.includes(candidate.id) && candidate.enabled,
+    )
     if (!channel) return
 
     const firstModel = channel.models.find((m) => m.enabled)
     if (!firstModel) return
 
     // 更新 per-session map（带幂等守卫，避免无意义写入导致 effect 自循环）
+    setSessionChannelMap((prev) => {
+      if (prev.get(sessionId) === channel.id) return prev
+      const map = new Map(prev)
+      map.set(sessionId, channel.id)
+      return map
+    })
     setSessionModelMap((prev) => {
       if (prev.get(sessionId) === firstModel.id) return prev
       const map = new Map(prev)
@@ -520,14 +724,22 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     })
     // 全局默认值 + 持久化 IPC 也加幂等：firstModel 与当前 defaultModelId 相同时跳过，
     // 避免每次 agentChannelId / globalChannels 变化都重复写盘和触发 agentModelIdAtom 更新。
+    if (defaultChannelId !== channel.id) {
+      setDefaultChannelId(channel.id)
+    }
     if (defaultModelId !== firstModel.id) {
       setDefaultModelId(firstModel.id)
       window.electronAPI.updateSettings({
-        agentChannelId,
+        agentChannelId: channel.id,
+        agentModelId: firstModel.id,
+      }).catch(console.error)
+    } else if (defaultChannelId !== channel.id) {
+      window.electronAPI.updateSettings({
+        agentChannelId: channel.id,
         agentModelId: firstModel.id,
       }).catch(console.error)
     }
-  }, [agentChannelId, agentModelId, globalChannels, sessionId, setSessionModelMap, setDefaultModelId])
+  }, [selectedModelAvailable, selectableAgentChannelIds, globalChannels, sessionId, setSessionChannelMap, setSessionModelMap, defaultChannelId, defaultModelId, setDefaultChannelId, setDefaultModelId])
 
   // 获取当前 session 的工作路径（文件浏览器需要）
   React.useEffect(() => {
@@ -1188,7 +1400,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     const text = inputContent.trim()
     // 如果输入为空但有建议，使用建议内容
     const effectiveText = text || suggestion || ''
-    if ((!effectiveText && pendingFiles.length === 0) || !agentChannelId || !hasAvailableModel) return
+    if ((!effectiveText && pendingFiles.length === 0) || !agentChannelId || !selectedModelAvailable) return
     const additionalDirectoriesForRun = new Set(attachedDirs)
     for (const dir of attachedFileDirectories) {
       additionalDirectoriesForRun.add(dir)
@@ -1449,7 +1661,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         return map
       })
     })
-  }, [inputContent, pendingFiles, attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, workspaces, streaming, suggestion, hasAvailableModel, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, permissionMode])
+  }, [inputContent, pendingFiles, attachedDirs, attachedFileDirectories, sessionId, agentChannelId, agentModelId, currentWorkspaceId, workspaces, streaming, suggestion, selectedModelAvailable, store, setStreamingStates, setPendingFiles, setAgentStreamErrors, setPromptSuggestions, setInputContent, setLiveMessagesMap, permissionMode])
 
   /** 停止生成 */
   const handleStop = React.useCallback((): void => {
@@ -1643,11 +1855,6 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
   /** 分叉会话：从指定消息处创建新会话并自动切换 */
   const handleFork = React.useCallback(async (upToMessageUuid: string): Promise<void> => {
-    if (isPiAgentEngine) {
-      toast.info('Pi Agent RPC experimental 暂不支持会话分叉。请在 Claude SDK 工作区中使用该功能。')
-      return
-    }
-
     try {
       const meta = await window.electronAPI.forkAgentSession({
         sessionId,
@@ -1673,26 +1880,154 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         description: friendlyDesc,
       })
     }
-  }, [sessionId, openSession, setAgentSessions, isPiAgentEngine])
+  }, [sessionId, openSession, setAgentSessions])
+
+  /** Pi runtime clone：克隆当前活跃 Pi 原生 session 分支并切到新 Proma 会话 */
+  const handleCloneActivePiSession = React.useCallback(async (): Promise<void> => {
+    try {
+      const meta = await window.electronAPI.cloneActiveAgentSession(sessionId)
+      setAgentSessions((prev) => [meta, ...prev])
+      openSession('agent', meta.id, meta.title)
+      toast.success('已克隆 Pi 会话分支', {
+        description: meta.title,
+      })
+    } catch (error) {
+      console.error('[AgentView] 克隆 Pi 会话失败:', error)
+      toast.error('克隆 Pi 会话失败', {
+        description: error instanceof Error ? error.message : '未知错误',
+      })
+    }
+  }, [sessionId, openSession, setAgentSessions])
+
+  const loadPiNativeSessions = React.useCallback(async (): Promise<void> => {
+    try {
+      setPiNativeSessionsLoading(true)
+      const sessions = await window.electronAPI.listPiNativeSessions()
+      setPiNativeSessions(sessions)
+    } catch (error) {
+      console.error('[AgentView] 读取 Pi 原生会话列表失败:', error)
+      toast.error('读取 Pi 原生会话列表失败', {
+        description: error instanceof Error ? error.message : '未知错误',
+      })
+    } finally {
+      setPiNativeSessionsLoading(false)
+    }
+  }, [])
+
+  const handlePiSessionPopoverOpenChange = React.useCallback((open: boolean): void => {
+    setPiSessionPopoverOpen(open)
+    if (open) {
+      void loadPiNativeSessions()
+    }
+  }, [loadPiNativeSessions])
+
+  /** Pi session 文件：运行中执行 runtime switch_session，未运行时设置下次启动恢复 */
+  const applyPiSessionFile = React.useCallback(async (sessionPath: string): Promise<void> => {
+    try {
+      const meta = streaming
+        ? await window.electronAPI.switchActiveAgentSession({
+            sessionId,
+            sessionPath,
+          })
+        : await window.electronAPI.setPiSessionFileForNextRun({
+            sessionId,
+            sessionPath,
+          })
+      setAgentSessions((prev) => prev.map((item) => item.id === meta.id ? meta : item))
+      setPiSessionPopoverOpen(false)
+      toast.success(streaming ? '已切换 Pi 原生会话' : '已设置 Pi 原生会话文件', {
+        description: sessionPath,
+      })
+    } catch (error) {
+      console.error('[AgentView] 选择 Pi 原生会话文件失败:', error)
+      toast.error(streaming ? '切换 Pi 原生会话失败' : '设置 Pi 原生会话文件失败', {
+        description: error instanceof Error ? error.message : '未知错误',
+      })
+    }
+  }, [sessionId, streaming, setAgentSessions])
+
+  const handleSelectPiSessionFile = React.useCallback(async (): Promise<void> => {
+    try {
+      const sessionPath = await window.electronAPI.openPiSessionFileDialog()
+      if (!sessionPath) return
+      await applyPiSessionFile(sessionPath)
+    } catch (error) {
+      console.error('[AgentView] 选择 Pi 原生会话文件失败:', error)
+      toast.error(streaming ? '切换 Pi 原生会话失败' : '设置 Pi 原生会话文件失败', {
+        description: error instanceof Error ? error.message : '未知错误',
+      })
+    }
+  }, [applyPiSessionFile, streaming])
+
+  const handlePreviewPiNativeSession = React.useCallback(async (session: PiNativeSessionSummary): Promise<void> => {
+    try {
+      const messages = await window.electronAPI.loadPiNativeSessionMessages({
+        sessionId,
+        sessionPath: session.path,
+        leafEntryId: session.leafEntryId,
+      })
+      toast.success('Pi 原生历史可读取', {
+        description: `当前 branch 可转换 ${messages.length} 条 Proma 消息`,
+      })
+    } catch (error) {
+      console.error('[AgentView] 预览 Pi 原生会话历史失败:', error)
+      toast.error('预览 Pi 原生会话历史失败', {
+        description: error instanceof Error ? error.message : '未知错误',
+      })
+    }
+  }, [sessionId])
+
+  const [piNativeSyncTarget, setPiNativeSyncTarget] = React.useState<PiNativeSessionSummary | null>(null)
+
+  const handleRequestSyncPiNativeSession = React.useCallback((session: PiNativeSessionSummary): void => {
+    setPiNativeSyncTarget(session)
+  }, [])
+
+  const handleSyncPiNativeSessionConfirm = React.useCallback(async (): Promise<void> => {
+    if (!piNativeSyncTarget) return
+    const target = piNativeSyncTarget
+    setPiNativeSyncTarget(null)
+
+    try {
+      const result = await window.electronAPI.syncPiNativeSessionMessages({
+        sessionId,
+        ...(!streaming && { sessionPath: target.path }),
+        leafEntryId: target.leafEntryId,
+      })
+
+      store.set(agentMessageRefreshAtom, (prev) => {
+        const map = new Map(prev)
+        map.set(sessionId, (prev.get(sessionId) ?? 0) + 1)
+        return map
+      })
+
+      if (result.importedCount > 0) {
+        toast.success('已同步 Pi 原生历史', {
+          description: `新增 ${result.importedCount} 条，跳过 ${result.skippedCount} 条已存在消息`,
+        })
+      } else {
+        toast.info('Pi 原生历史已是最新', {
+          description: `已检查 ${result.totalCount} 条消息，没有新增内容`,
+        })
+      }
+    } catch (error) {
+      console.error('[AgentView] 同步 Pi 原生会话历史失败:', error)
+      toast.error('同步 Pi 原生会话历史失败', {
+        description: error instanceof Error ? error.message : '未知错误',
+      })
+    }
+  }, [piNativeSyncTarget, sessionId, store, streaming])
 
   /** 快照回退：同一会话内回退到指定消息点，恢复文件 + 截断对话 */
   const [rewindTargetUuid, setRewindTargetUuid] = React.useState<string | null>(null)
+  const [piCheckpointRestoreTarget, setPiCheckpointRestoreTarget] = React.useState<NonNullable<ApplyPiGitCheckpointResult['checkpoint']> | null>(null)
 
   const handleRewindRequest = React.useCallback((assistantMessageUuid: string): void => {
-    if (isPiAgentEngine) {
-      toast.info('Pi Agent RPC experimental 暂不支持文件快照回退。')
-      return
-    }
     setRewindTargetUuid(assistantMessageUuid)
-  }, [isPiAgentEngine])
+  }, [])
 
   const handleRewindConfirm = React.useCallback(async (): Promise<void> => {
     if (!rewindTargetUuid) return
-    if (isPiAgentEngine) {
-      setRewindTargetUuid(null)
-      toast.info('Pi Agent RPC experimental 暂不支持文件快照回退。')
-      return
-    }
     const targetUuid = rewindTargetUuid
     setRewindTargetUuid(null)
 
@@ -1719,6 +2054,11 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         toast.success('已回退到此处', {
           description: fileCount > 0 ? `${fileCount} 个文件已恢复` : '文件无变化',
         })
+      } else if (result.fileRewind?.checkpoint) {
+        setPiCheckpointRestoreTarget(result.fileRewind.checkpoint)
+        toast.warning('已回退对话', {
+          description: '已找到 Pi git checkpoint。请确认后再恢复文件。',
+        })
       } else if (result.fileRewind?.error) {
         toast.warning('已回退对话', {
           description: `文件恢复不可用：${result.fileRewind.error}`,
@@ -1732,7 +2072,40 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         description: error instanceof Error ? error.message : '未知错误',
       })
     }
-  }, [rewindTargetUuid, sessionId, store, isPiAgentEngine])
+  }, [rewindTargetUuid, sessionId, store])
+
+  const handlePiCheckpointRestoreConfirm = React.useCallback(async (): Promise<void> => {
+    if (!piCheckpointRestoreTarget) return
+    const target = piCheckpointRestoreTarget
+    setPiCheckpointRestoreTarget(null)
+
+    try {
+      const result = await window.electronAPI.applyPiGitCheckpoint({
+        sessionId,
+        targetEntryId: target.targetEntryId,
+      })
+
+      if (result.restored) {
+        store.set(agentDiffRefreshVersionAtom, (prev) => {
+          const m = new Map(prev)
+          m.set(sessionId, (prev.get(sessionId) ?? 0) + 1)
+          return m
+        })
+        toast.success('已恢复 Pi checkpoint 文件', {
+          description: formatPiCheckpointRestoreDescription(result),
+        })
+      } else {
+        toast.warning('未恢复 Pi checkpoint 文件', {
+          description: result.error ?? '恢复未执行',
+        })
+      }
+    } catch (error) {
+      console.error('[AgentView] 恢复 Pi git checkpoint 失败:', error)
+      toast.error('恢复 Pi checkpoint 失败', {
+        description: error instanceof Error ? error.message : '未知错误',
+      })
+    }
+  }, [piCheckpointRestoreTarget, sessionId, store])
 
   // 监听快捷键系统分发的 stop-generation 事件
   React.useEffect(() => {
@@ -1778,14 +2151,14 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
   }, [togglePreviewPanel])
 
   const hasTextInput = inputContent.trim().length > 0
-  const canSend = (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput)
+  const canSend = (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && selectedModelAvailable && (!streaming || hasTextInput)
 
   const inputToolbarItems = React.useMemo<ToolbarItem[]>(() => [
     {
       key: 'model',
       node: (
         <ModelSelector
-          filterChannelIds={agentChannelIds}
+          filterChannelIds={selectableAgentChannelIds}
           externalSelectedModel={externalSelectedModel}
           onModelSelect={handleModelSelect}
         />
@@ -1829,6 +2202,44 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         </Tooltip>
       ),
     },
+    ...(isPiAgentEngine && streaming ? [{
+      key: 'pi-clone',
+      node: (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="size-[36px] shrink-0 rounded-full text-amber-600 hover:bg-amber-500/10 hover:text-amber-700 dark:text-amber-300 dark:hover:text-amber-200"
+              onClick={handleCloneActivePiSession}
+            >
+              <Copy className="size-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            <p>克隆当前 Pi 会话分支</p>
+          </TooltipContent>
+        </Tooltip>
+      ),
+    } satisfies ToolbarItem] : []),
+    ...(isPiAgentEngine ? [{
+      key: 'pi-switch-session',
+      node: (
+        <PiNativeSessionPopover
+          open={piSessionPopoverOpen}
+          streaming={streaming}
+          sessions={piNativeSessions}
+          loading={piNativeSessionsLoading}
+          onOpenChange={handlePiSessionPopoverOpenChange}
+          onRefresh={loadPiNativeSessions}
+          onSelectSession={applyPiSessionFile}
+          onPreviewSession={handlePreviewPiNativeSession}
+          onSyncSession={handleRequestSyncPiNativeSession}
+          onSelectFile={handleSelectPiSessionFile}
+        />
+      ),
+    } satisfies ToolbarItem] : []),
     {
       key: 'attach-folder',
       node: (
@@ -1877,13 +2288,24 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       ),
     },
   ], [
-    agentChannelIds,
+    selectableAgentChannelIds,
     externalSelectedModel,
     handleModelSelect,
     sessionId,
     agentThinking,
     setAgentThinking,
     handleOpenFileDialog,
+    isPiAgentEngine,
+    handleCloneActivePiSession,
+    piSessionPopoverOpen,
+    piNativeSessions,
+    piNativeSessionsLoading,
+    handlePiSessionPopoverOpenChange,
+    loadPiNativeSessions,
+    applyPiSessionFile,
+    handlePreviewPiNativeSession,
+    handleRequestSyncPiNativeSession,
+    handleSelectPiSessionFile,
     handleAttachFolder,
     contextStatus.inputTokens,
     contextStatus.outputTokens,
@@ -1943,7 +2365,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
         {isPiAgentEngine && (
           <div className="mx-4 mb-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-700 dark:text-amber-300">
-            Pi Agent RPC experimental 当前通过 @earendil-works/pi-coding-agent 运行本地 coding 最小闭环；分叉、回退和 Claude SDK 原生恢复暂不可用。
+            Pi Agent RPC experimental 当前支持本地 coding 最小闭环、Proma 权限确认、Pi 原生 Skills、Proma MCP bridge 逐工具调用、Pi session tree 分叉/克隆/切换，以及 Pi git checkpoint 显式文件恢复；MCP bridge 不是 Claude SDK 深度注入。
           </div>
         )}
 
@@ -1961,8 +2383,8 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
           stoppedByUser={stoppedByUser}
           onRetry={handleRetry}
           onRetryInNewSession={handleRetryInNewSession}
-          onFork={isPiAgentEngine ? undefined : handleFork}
-          onRewind={isPiAgentEngine ? undefined : handleRewindRequest}
+          onFork={handleFork}
+          onRewind={handleRewindRequest}
           onCompact={handleCompact}
         />
 
@@ -1998,11 +2420,17 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
             onDrop={handleDrop}
           >
             {(isPlanMode || isPermissionPlanMode) && !isDragOver && <PlanModeDashedBorder />}
-            {/* 无 Agent 渠道或无可用模型提示 */}
-            {(!agentChannelId || !hasAvailableModel) && (
+            {/* 无 Agent 渠道、无可用模型或当前选择不可用提示 */}
+            {(!agentChannelId || !hasAvailableModel || !selectedModelAvailable) && (
               <div className="flex items-center gap-2 px-4 py-2 text-sm text-amber-600 dark:text-amber-400">
                 <Settings size={14} />
-                <span>{!agentChannelId ? '请在设置中选择 Agent 供应商' : '暂无可用模型，请在设置中启用 Agent 渠道并配置模型'}</span>
+                <span>
+                  {!agentChannelId
+                    ? '请在设置中选择 Agent 供应商'
+                    : hasAvailableModel
+                      ? '当前模型不可用于此 Agent runtime，请重新选择模型'
+                      : '暂无可用模型，请在设置中启用 Agent 渠道并配置模型'}
+                </span>
                 <button
                   type="button"
                   className="text-xs underline underline-offset-2 hover:text-foreground transition-colors"
@@ -2070,15 +2498,17 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
               onPasteLongText={handlePasteLongText}
               longTextPasteThreshold={LONG_TEXT_ATTACHMENT_THRESHOLD}
               placeholder={
-                agentChannelId && hasAvailableModel
+                agentChannelId && selectedModelAvailable
                   ? sendWithCmdEnter
                     ? '输入消息... (⌘/Ctrl+Enter 发送，Enter 换行，@ 引用文件，/ 调用 Skill，# 调用 MCP，& 引用会话)'
                     : '输入消息... (Enter 发送，Shift+Enter 换行，@ 引用文件，/ 调用 Skill，# 调用 MCP，& 引用会话)'
                   : !agentChannelId
                     ? '请先在设置中选择 Agent 供应商'
-                    : '暂无可用模型，请先在设置中启用渠道'
+                    : hasAvailableModel
+                      ? '当前模型不可用于此 Agent runtime，请重新选择模型'
+                      : '暂无可用模型，请先在设置中启用渠道'
               }
-              disabled={!agentChannelId || !hasAvailableModel}
+              disabled={!agentChannelId || !selectedModelAvailable}
               autoFocusTrigger={sessionId}
               collapsible
               enableMentions
@@ -2120,6 +2550,60 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
             回退
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+
+    {/* Pi git checkpoint 文件恢复确认弹窗 */}
+    <AlertDialog
+      open={piCheckpointRestoreTarget !== null}
+      onOpenChange={(v) => { if (!v) setPiCheckpointRestoreTarget(null) }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>恢复 Pi checkpoint 文件</AlertDialogTitle>
+          <AlertDialogDescription>
+            Proma 已在 Pi 原生历史中找到 git checkpoint。恢复前会检查工作区是否还有未提交改动；若工作区不干净，恢复会被拒绝。确认恢复到该 checkpoint 的文件状态吗？
+            {piCheckpointRestoreTarget?.cwd ? ` 工作区：${piCheckpointRestoreTarget.cwd}` : ''}
+            {piCheckpointRestoreTarget?.gitRef ? ` Git ref：${piCheckpointRestoreTarget.gitRef.slice(0, 12)}` : ''}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>暂不恢复</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={handlePiCheckpointRestoreConfirm}
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+          >
+            恢复文件
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+
+    {/* Pi 原生历史同步确认弹窗 */}
+    <AlertDialog
+      open={piNativeSyncTarget !== null}
+      onOpenChange={(v) => { if (!v) setPiNativeSyncTarget(null) }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>同步 Pi 原生历史</AlertDialogTitle>
+          <AlertDialogDescription>
+            {streaming
+              ? '将从当前运行中的 Pi runtime 读取最新消息快照并写入此 Proma 会话，已导入过的 Pi entry 会自动跳过。'
+              : `将把「${piNativeSyncTarget ? getPiNativeSessionDisplayTitle(piNativeSyncTarget) : 'Pi 原生会话'}」当前 branch 的可展示消息写入此 Proma 会话，已导入过的 Pi entry 会自动跳过。`}
+            {piNativeSyncTarget?.branchEntryCount !== undefined
+              ? ` 当前 branch 约 ${piNativeSyncTarget.branchEntryCount} 个 entry。`
+              : piNativeSyncTarget?.messageCount !== undefined
+                ? ` 该文件包含 ${piNativeSyncTarget.messageCount} 条 message。`
+                : ''}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>取消</AlertDialogCancel>
+          <AlertDialogAction onClick={handleSyncPiNativeSessionConfirm}>
+            同步
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

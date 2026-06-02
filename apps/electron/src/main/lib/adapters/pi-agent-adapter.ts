@@ -5,12 +5,18 @@ import type {
   SDKMessage,
   AgentRuntimeExtensionUiRequest,
   AgentRuntimeExtensionUiResponse,
+  AgentRuntimeCloneResult,
+  AgentRuntimeForkMessage,
+  AgentRuntimeForkResult,
+  AgentRuntimeSwitchSessionResult,
+  SDKUserMessageInput,
 } from '@proma/shared'
 import { convertPiTextDelta, convertPiThinkingDelta, convertPiToolStart } from './pi-event-converter'
-import { startPiRpcSession, type PiRpcEvent, type StartedPiRpcSession } from './pi-process'
+import { startPiRpcSession, type PiRpcCommand, type PiRpcEvent, type StartedPiRpcSession } from './pi-process'
 
 const PI_UNSUPPORTED_MESSAGE = 'Pi 进程集成尚未在此构建中实现或启用。'
 const PI_RPC_TERMINATED_MESSAGE = 'Pi RPC 会话在完成前结束。'
+const PI_COMMAND_TIMEOUT_MS = 10_000
 const KNOWN_PI_RPC_EVENT_TYPES = new Set([
   'agent_start',
   'agent_end',
@@ -32,6 +38,13 @@ const KNOWN_PI_RPC_EVENT_TYPES = new Set([
   'turn_end',
   'turn_start',
 ])
+const PI_RUNTIME_COMMANDS = new Set([
+  'clone',
+  'fork',
+  'get_fork_messages',
+  'get_messages',
+  'switch_session',
+])
 const KNOWN_PI_MESSAGE_UPDATE_EVENT_TYPES = new Set([
   'done',
   'error',
@@ -46,6 +59,11 @@ const KNOWN_PI_MESSAGE_UPDATE_EVENT_TYPES = new Set([
   'toolcall_end',
   'toolcall_start',
 ])
+
+interface PiRuntimeCommandInput {
+  type: string
+  [key: string]: unknown
+}
 
 function isPiAgentEnabled(): boolean {
   return process.env.PROMA_PI_AGENT_ENABLED !== '0'
@@ -109,6 +127,47 @@ function createTransientThinkingDeltaMessage(input: AgentQueryInput, delta: stri
   } as unknown as SDKMessage
 }
 
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+}
+
+function formatQueuedMessages(messages: string[], label: string): string[] {
+  if (messages.length === 0) return []
+  const preview = messages
+    .slice(0, 3)
+    .map((message, index) => `  ${index + 1}. ${message.length > 80 ? `${message.slice(0, 80)}...` : message}`)
+
+  return [
+    `- ${label}: ${messages.length}`,
+    ...preview,
+    ...(messages.length > preview.length ? [`  ...另有 ${messages.length - preview.length} 条`] : []),
+  ]
+}
+
+function createPiQueueSummaryMessage(input: AgentQueryInput, event: PiRpcEvent): SDKMessage | null {
+  if (event.type !== 'queue_update') return null
+
+  const steering = asStringArray(event.steering)
+  const followUp = asStringArray(event.followUp)
+  if (steering.length === 0 && followUp.length === 0) return null
+
+  const lines = [
+    `Pi 队列已更新：steering: ${steering.length}, follow-up: ${followUp.length}`,
+    ...formatQueuedMessages(steering, 'steering'),
+    ...formatQueuedMessages(followUp, 'follow-up'),
+  ]
+
+  return {
+    type: 'tool_use_summary',
+    summary: lines.join('\n'),
+    preceding_tool_use_ids: [],
+    session_id: input.sessionId,
+    _promaTransient: true,
+    _promaPiQueueSummary: true,
+  } as unknown as SDKMessage
+}
+
 function createSuccessResultMessage(input: AgentQueryInput): SDKMessage {
   return {
     type: 'result',
@@ -128,9 +187,30 @@ function normalizePiToolResultContent(value: unknown): unknown {
   return Array.isArray(record.content) ? record.content : value
 }
 
+function buildPiToolUseResult(
+  value: unknown,
+  isError: boolean,
+  primitiveKey: 'result' | 'partialResult' = 'result',
+): Record<string, unknown> | null {
+  const record = asRecord(value)
+  if (!record) {
+    if (value == null) return null
+    return {
+      [primitiveKey]: value,
+      isError,
+    }
+  }
+
+  return {
+    ...record,
+    isError,
+  }
+}
+
 function createToolResultMessage(input: AgentQueryInput, event: PiRpcEvent): SDKMessage | null {
   const toolUseId = getString(event, 'toolCallId')
   if (!toolUseId) return null
+  const toolUseResult = buildPiToolUseResult(event.result, event.isError === true)
 
   return {
     type: 'user',
@@ -146,6 +226,7 @@ function createToolResultMessage(input: AgentQueryInput, event: PiRpcEvent): SDK
     },
     parent_tool_use_id: null,
     session_id: input.sessionId,
+    ...(toolUseResult ? { toolUseResult } : {}),
   }
 }
 
@@ -154,6 +235,16 @@ function createTransientToolProgressMessage(input: AgentQueryInput, event: PiRpc
 
   const toolUseId = getString(event, 'toolCallId')
   if (!toolUseId) return null
+  const toolName = getString(event, 'toolName')
+  const toolUseResult = buildPiToolUseResult(event.partialResult, false, 'partialResult')
+  const args = asRecord(event.args)
+  const enrichedToolUseResult = toolUseResult
+    ? {
+        ...toolUseResult,
+        ...(toolName ? { toolName } : {}),
+        ...(args ? { input: args } : {}),
+      }
+    : null
 
   return {
     type: 'user',
@@ -169,6 +260,7 @@ function createTransientToolProgressMessage(input: AgentQueryInput, event: PiRpc
     },
     parent_tool_use_id: null,
     session_id: input.sessionId,
+    ...(enrichedToolUseResult ? { toolUseResult: enrichedToolUseResult } : {}),
     _promaTransient: true,
     _promaToolProgress: true,
   } as unknown as SDKMessage
@@ -203,6 +295,15 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 function getString(record: Record<string, unknown>, key: string): string | null {
   const value = record[key]
   return typeof value === 'string' ? value : null
+}
+
+function getBoolean(record: Record<string, unknown>, key: string): boolean | null {
+  const value = record[key]
+  return typeof value === 'boolean' ? value : null
+}
+
+function getRecord(record: Record<string, unknown>, key: string): Record<string, unknown> | null {
+  return asRecord(record[key])
 }
 
 function getPromptFailureMessage(event: PiRpcEvent): string | null {
@@ -267,6 +368,25 @@ function extractAssistantContentFromPiMessage(message: Record<string, unknown>):
   return blocks
 }
 
+function extractPiEntryId(event: PiRpcEvent, message: Record<string, unknown>): string | null {
+  const directEntryId = getString(event, 'entryId') ?? getString(event, 'entry_id')
+  if (directEntryId) return directEntryId
+
+  const eventEntry = getRecord(event, 'entry')
+  const eventEntryId = eventEntry
+    ? getString(eventEntry, 'id') ?? getString(eventEntry, 'entryId') ?? getString(eventEntry, 'entry_id')
+    : null
+  if (eventEntryId) return eventEntryId
+
+  const messageEntryId = getString(message, 'entryId') ?? getString(message, 'entry_id')
+  if (messageEntryId) return messageEntryId
+
+  const messageEntry = getRecord(message, 'entry')
+  return messageEntry
+    ? getString(messageEntry, 'id') ?? getString(messageEntry, 'entryId') ?? getString(messageEntry, 'entry_id')
+    : null
+}
+
 function createFinalAssistantMessage(input: AgentQueryInput, event: PiRpcEvent): SDKMessage | null {
   if (event.type !== 'message_end') return null
 
@@ -275,6 +395,7 @@ function createFinalAssistantMessage(input: AgentQueryInput, event: PiRpcEvent):
 
   const content = extractAssistantContentFromPiMessage(message)
   if (content.length === 0) return null
+  const piEntryId = extractPiEntryId(event, message)
 
   return {
     type: 'assistant',
@@ -284,6 +405,88 @@ function createFinalAssistantMessage(input: AgentQueryInput, event: PiRpcEvent):
     },
     parent_tool_use_id: null,
     session_id: input.sessionId,
+    ...(piEntryId ? { _promaPiEntryId: piEntryId } : {}),
+  }
+}
+
+function isPiResponseEvent(event: PiRpcEvent): boolean {
+  return event.type === 'response' && typeof event.id === 'string' && typeof event.command === 'string'
+}
+
+function isRuntimeCommandResponse(event: PiRpcEvent): boolean {
+  if (!isPiResponseEvent(event)) return false
+  const command = getString(event, 'command')
+  return command ? PI_RUNTIME_COMMANDS.has(command) : false
+}
+
+function normalizePiCommandError(command: string, event: PiRpcEvent): Error {
+  const message = typeof event.error === 'string'
+    ? event.error
+    : `Pi RPC command failed: ${command}`
+
+  return new Error(message)
+}
+
+function parseForkMessagesData(data: unknown): AgentRuntimeForkMessage[] {
+  const dataRecord = asRecord(data)
+  const messages = Array.isArray(dataRecord?.messages) ? dataRecord.messages : []
+  const normalized: AgentRuntimeForkMessage[] = []
+
+  for (const item of messages) {
+    const itemRecord = asRecord(item)
+    if (!itemRecord) continue
+
+    const id = getString(itemRecord, 'id')
+    if (!id) continue
+
+    const text = getString(itemRecord, 'text') ?? ''
+    normalized.push({
+      ...itemRecord,
+      id,
+      text,
+    })
+  }
+
+  return normalized
+}
+
+function parseForkResultData(data: unknown): AgentRuntimeForkResult {
+  const dataRecord = asRecord(data) ?? {}
+  const cancelled = getBoolean(dataRecord, 'cancelled') ?? false
+  const text = getString(dataRecord, 'text')
+  const sessionId = getString(dataRecord, 'sessionId')
+  const sessionPath = getString(dataRecord, 'sessionPath')
+
+  return {
+    ...dataRecord,
+    cancelled,
+    ...(text ? { text } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    ...(sessionPath ? { sessionPath } : {}),
+  }
+}
+
+function parseCloneResultData(data: unknown): AgentRuntimeCloneResult {
+  const dataRecord = asRecord(data) ?? {}
+  const cancelled = getBoolean(dataRecord, 'cancelled') ?? false
+  const sessionId = getString(dataRecord, 'sessionId')
+  const sessionPath = getString(dataRecord, 'sessionPath')
+
+  return {
+    ...dataRecord,
+    cancelled,
+    ...(sessionId ? { sessionId } : {}),
+    ...(sessionPath ? { sessionPath } : {}),
+  }
+}
+
+function parseSwitchSessionResultData(data: unknown): AgentRuntimeSwitchSessionResult {
+  const dataRecord = asRecord(data) ?? {}
+  const cancelled = getBoolean(dataRecord, 'cancelled') ?? false
+
+  return {
+    ...dataRecord,
+    cancelled,
   }
 }
 
@@ -348,22 +551,118 @@ function convertPiRpcEvent(input: AgentQueryInput, event: PiRpcEvent): SDKMessag
     return toolProgressMessage ? [toolProgressMessage] : []
   }
 
+  if (event.type === 'queue_update') {
+    const queueSummaryMessage = createPiQueueSummaryMessage(input, event)
+    return queueSummaryMessage ? [queueSummaryMessage] : []
+  }
+
   return []
 }
 
 export class PiAgentAdapter implements AgentProviderAdapter {
   readonly name = 'pi' as const
   private readonly processes = new Map<string, StartedPiRpcSession>()
+  private readonly pendingResponses = new Map<string, Map<string, {
+    command: string
+    resolve: (event: PiRpcEvent) => void
+    reject: (error: Error) => void
+    timeout: NodeJS.Timeout
+  }>>()
   private readonly unknownEventTypes = new Set<string>()
   private readonly unknownChildEventTypes = new Set<string>()
   private readonly malformedEventTypes = new Set<string>()
 
   private recordUnknownEvent(event: PiRpcEvent): void {
     if (KNOWN_PI_RPC_EVENT_TYPES.has(event.type)) return
+    if (isRuntimeCommandResponse(event)) return
     if (this.unknownEventTypes.has(event.type)) return
 
     this.unknownEventTypes.add(event.type)
     console.warn(`[Pi Agent] 未识别 Pi RPC 事件，已跳过: ${event.type}`)
+  }
+
+  private consumePendingResponse(sessionId: string, event: PiRpcEvent): boolean {
+    if (!isPiResponseEvent(event)) return false
+
+    const responseId = getString(event, 'id')
+    const pendingBySession = this.pendingResponses.get(sessionId)
+    const pending = responseId ? pendingBySession?.get(responseId) : undefined
+    if (!pending || !responseId) return false
+
+    pendingBySession?.delete(responseId)
+    if (pendingBySession && pendingBySession.size === 0) {
+      this.pendingResponses.delete(sessionId)
+    }
+    clearTimeout(pending.timeout)
+
+    if (event.success === false) {
+      pending.reject(normalizePiCommandError(pending.command, event))
+      return true
+    }
+
+    pending.resolve(event)
+    return true
+  }
+
+  private rejectPendingResponses(sessionId: string, message: string): void {
+    const pendingBySession = this.pendingResponses.get(sessionId)
+    if (!pendingBySession) return
+
+    this.pendingResponses.delete(sessionId)
+    for (const pending of pendingBySession.values()) {
+      clearTimeout(pending.timeout)
+      pending.reject(new Error(message))
+    }
+  }
+
+  private sendRuntimeCommand(
+    sessionId: string,
+    command: PiRuntimeCommandInput,
+    idPrefix: string,
+  ): Promise<PiRpcEvent> {
+    const piProcess = this.processes.get(sessionId)
+    if (!piProcess) {
+      throw new Error(`[Pi Agent] 会话未运行，无法执行 Pi 原生命令: ${sessionId}`)
+    }
+
+    const commandName = command.type
+    const commandId = `${idPrefix}-${sessionId}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const commandWithId: PiRpcCommand = {
+      ...command,
+      id: commandId,
+    }
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        const pendingBySession = this.pendingResponses.get(sessionId)
+        pendingBySession?.delete(commandId)
+        if (pendingBySession && pendingBySession.size === 0) {
+          this.pendingResponses.delete(sessionId)
+        }
+        reject(new Error(`[Pi Agent] Pi 原生命令超时: ${commandName}`))
+      }, PI_COMMAND_TIMEOUT_MS)
+      timeout.unref()
+
+      const pendingBySession = this.pendingResponses.get(sessionId) ?? new Map()
+      pendingBySession.set(commandId, {
+        command: commandName,
+        resolve,
+        reject,
+        timeout,
+      })
+      this.pendingResponses.set(sessionId, pendingBySession)
+
+      try {
+        piProcess.send(commandWithId)
+      } catch (error) {
+        pendingBySession.delete(commandId)
+        if (pendingBySession.size === 0) {
+          this.pendingResponses.delete(sessionId)
+        }
+        clearTimeout(timeout)
+        reject(error instanceof Error ? error : new Error(String(error)))
+      }
+    })
   }
 
   private recordUnknownChildEvent(event: PiRpcEvent): void {
@@ -415,6 +714,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         provider: input.provider,
         sessionId: input.sessionId,
         sessionDir: input.runtimeSessionDir,
+        sessionPath: input.runtimeSessionPath,
+        extensionPaths: input.runtimeExtensionPaths,
+        skillPaths: input.runtimeSkillPaths,
         runtimeEnv: input.runtimeEnv,
         abortSignal: input.abortSignal,
       })
@@ -436,8 +738,13 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       })
 
       for await (const event of piProcess.events) {
+        if (this.consumePendingResponse(input.sessionId, event)) {
+          continue
+        }
+
         if (event.type === 'protocol_error') {
           const message = typeof event.error === 'string' ? event.error : 'Pi RPC protocol error'
+          this.rejectPendingResponses(input.sessionId, message)
           yield createErrorAssistantMessage(input, message, 'pi_protocol_error')
           yield createErrorResultMessage(input, message)
           return
@@ -501,10 +808,12 @@ export class PiAgentAdapter implements AgentProviderAdapter {
 
       const processResult = await piProcess.done
       const diagnosticMessage = `${PI_RPC_TERMINATED_MESSAGE}\n\n${formatPiProcessDiagnostics(processResult)}`
+      this.rejectPendingResponses(input.sessionId, diagnosticMessage)
       yield createErrorAssistantMessage(input, diagnosticMessage, 'pi_rpc_terminated')
       yield createErrorResultMessage(input, diagnosticMessage)
     } finally {
       this.processes.delete(input.sessionId)
+      this.rejectPendingResponses(input.sessionId, '[Pi Agent] Pi RPC 会话已结束')
       piProcess.kill()
     }
   }
@@ -517,9 +826,93 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     piProcess.abort()
   }
 
+  async sendQueuedMessage(sessionId: string, message: SDKUserMessageInput): Promise<void> {
+    const piProcess = this.processes.get(sessionId)
+    if (!piProcess) {
+      throw new Error(`[Pi Agent] 会话未运行，无法追加消息: ${sessionId}`)
+    }
+
+    const text = message.message.content.trim()
+    if (!text) {
+      throw new Error('[Pi Agent] 追加消息内容为空')
+    }
+
+    // Proma 的运行中追加默认是"立即打断当前 turn 并续跑"，
+    // 对应 Pi RPC 的 steer；非 now 优先级保留为 follow_up 兜底。
+    piProcess.send({
+      id: `proma-${message.priority === 'now' ? 'steer' : 'follow-up'}-${message.uuid ?? Date.now()}`,
+      type: message.priority === 'now' ? 'steer' : 'follow_up',
+      message: text,
+    })
+  }
+
+  async getForkMessages(sessionId: string): Promise<AgentRuntimeForkMessage[]> {
+    const response = await this.sendRuntimeCommand(
+      sessionId,
+      { type: 'get_fork_messages' },
+      'proma-get-fork-messages',
+    )
+
+    return parseForkMessagesData(response.data)
+  }
+
+  async fork(sessionId: string, entryId: string): Promise<AgentRuntimeForkResult> {
+    const trimmedEntryId = entryId.trim()
+    if (!trimmedEntryId) {
+      throw new Error('[Pi Agent] fork entryId 不能为空')
+    }
+
+    const response = await this.sendRuntimeCommand(
+      sessionId,
+      { type: 'fork', entryId: trimmedEntryId },
+      'proma-fork',
+    )
+
+    return parseForkResultData(response.data)
+  }
+
+  async clone(sessionId: string): Promise<AgentRuntimeCloneResult> {
+    const response = await this.sendRuntimeCommand(
+      sessionId,
+      { type: 'clone' },
+      'proma-clone',
+    )
+
+    return parseCloneResultData(response.data)
+  }
+
+  async switchSession(sessionId: string, sessionPath: string): Promise<AgentRuntimeSwitchSessionResult> {
+    const trimmedSessionPath = sessionPath.trim()
+    if (!trimmedSessionPath) {
+      throw new Error('[Pi Agent] switch_session sessionPath 不能为空')
+    }
+
+    const response = await this.sendRuntimeCommand(
+      sessionId,
+      { type: 'switch_session', sessionPath: trimmedSessionPath },
+      'proma-switch-session',
+    )
+
+    return parseSwitchSessionResultData(response.data)
+  }
+
+  async getMessages(sessionId: string): Promise<SDKMessage[]> {
+    const response = await this.sendRuntimeCommand(
+      sessionId,
+      { type: 'get_messages' },
+      'proma-get-messages',
+    )
+    const data = asRecord(response.data)
+    const messages = Array.isArray(data?.messages) ? data.messages : []
+    return messages.filter((message): message is SDKMessage => Boolean(asRecord(message)))
+  }
+
   dispose(): void {
     for (const piProcess of this.processes.values()) {
       piProcess.abort()
+    }
+    for (const sessionId of this.pendingResponses.keys()) {
+      this.rejectPendingResponses(sessionId, '[Pi Agent] Pi adapter 已释放')
     }
     this.processes.clear()
   }

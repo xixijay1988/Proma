@@ -255,7 +255,7 @@ Agent 工具支持 \`model\` 参数（可选值：\`sonnet\` / \`opus\` / \`haik
 - 工作区根目录: ~/${configDirName}/agent-workspaces/${ctx.workspaceSlug}/
 - 当前会话目录（cwd）: ~/${configDirName}/agent-workspaces/${ctx.workspaceSlug}/${ctx.sessionId}/
 - MCP 配置: ~/${configDirName}/agent-workspaces/${ctx.workspaceSlug}/mcp.json（顶层 key 是 \`servers\`）
-- Skills 目录: ~/${configDirName}/agent-workspaces/${ctx.workspaceSlug}/skills/（Proma 只从此目录加载 skill；npx skills add 等外部命令安装到 .agents/skills/ 不会被加载，需手动 mv 到此目录）
+- Skills 目录: ~/${configDirName}/agent-workspaces/${ctx.workspaceSlug}/skills/（Proma 工作区级 Skill 主目录；支持原生 Agent Skills 的 runtime 也可能显式加载 ~/.agents/skills/ 等全局目录。若某个 Skill 在当前会话不可见，再导入或移动到工作区 skills/ 目录）
 
 ### .context 目录层级
 

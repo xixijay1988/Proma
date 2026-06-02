@@ -8,11 +8,11 @@
  * 照搬 conversation-manager.ts 的模式。
  */
 
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, rmSync, renameSync, readdirSync, cpSync, copyFileSync, createReadStream } from 'node:fs'
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, rmSync, renameSync, readdirSync, cpSync, copyFileSync, createReadStream, statSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
 import { randomUUID } from 'node:crypto'
-import { join, resolve, dirname } from 'node:path'
+import { basename, join, resolve, dirname } from 'node:path'
 import {
   getAgentSessionsIndexPath,
   getAgentSessionsDir,
@@ -20,6 +20,7 @@ import {
   getAgentSessionWorkspacePath,
   getAgentWorkspacePath,
   getSdkConfigDir,
+  getConfigDir,
 } from './config-paths'
 import { getAgentWorkspace } from './agent-workspace-manager'
 import { resolveExistingSessionAgentEngine } from './agent-engine'
@@ -39,9 +40,19 @@ import type {
   AgentMessageSearchResult,
   AgentSessionReferenceSearchInput,
   AgentSessionReferenceSearchResult,
+  GetTaskOutputInput,
+  GetTaskOutputResult,
+  PiNativeSessionSummary,
+  SDKAssistantMessage,
+  SyncPiNativeSessionMessagesInput,
+  SyncPiNativeSessionMessagesResult,
+  SDKToolResultBlock,
+  SDKToolUseBlock,
+  SDKUserMessage,
 } from '@proma/shared'
 import { getConversationMessages } from './conversation-manager'
 import { clearNanoBananaAgentHistory } from './chat-tools/nano-banana-mcp'
+import { convertPiNativeSessionEntriesToSDKMessages } from './adapters/pi-native-session-converter'
 
 /**
  * 会话索引文件格式
@@ -316,6 +327,188 @@ export function getAgentSessionSDKMessages(id: string): SDKMessage[] {
   }
 }
 
+interface PersistedTaskToolCall {
+  id: string
+  name: string
+  input: Record<string, unknown>
+}
+
+interface TaskOutputCandidate {
+  output: string
+  isComplete: boolean
+}
+
+const TASK_OUTPUT_TERMINAL_STATUSES = new Set([
+  'completed',
+  'cancelled',
+  'canceled',
+  'deleted',
+  'error',
+  'failed',
+  'stopped',
+])
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function stringifyStructuredValue(value: unknown): string | undefined {
+  if (value == null) return undefined
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return undefined
+  }
+}
+
+function extractToolResultTextFromContent(content: unknown): string | undefined {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return undefined
+
+  const text = content
+    .map((block) => {
+      if (!isRecord(block)) return ''
+      return typeof block.text === 'string' ? block.text : ''
+    })
+    .join('')
+
+  return text || undefined
+}
+
+function extractPersistedToolResultText(message: SDKUserMessage, resultBlock: SDKToolResultBlock): string | undefined {
+  const rawMessage = message as unknown as Record<string, unknown>
+  const structured = rawMessage.toolUseResult ?? rawMessage.tool_use_result
+  return stringifyStructuredValue(structured) ?? extractToolResultTextFromContent(resultBlock.content)
+}
+
+function parseJsonRecord(text: string | undefined): Record<string, unknown> | null {
+  if (!text) return null
+  try {
+    const parsed = JSON.parse(text)
+    return isRecord(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function stringValue(value: unknown): string | undefined {
+  if (typeof value === 'string') return value
+  if (typeof value === 'number') return String(value)
+  return undefined
+}
+
+function taskIdFromToolInput(input: Record<string, unknown>): string | undefined {
+  return stringValue(input.taskId ?? input.task_id ?? input.id)
+}
+
+function taskIdFromTaskRecord(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined
+  return stringValue(value.id ?? value.taskId ?? value.task_id)
+}
+
+function statusFromTaskRecord(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined
+  return stringValue(value.status)
+}
+
+function resultReferencesTask(resultText: string | undefined, taskId: string): boolean {
+  const parsed = parseJsonRecord(resultText)
+  if (!parsed) return false
+
+  if (taskIdFromTaskRecord(parsed.task) === taskId) return true
+  if (taskIdFromTaskRecord(parsed) === taskId) return true
+
+  const tasks = parsed.tasks
+  return Array.isArray(tasks) && tasks.some((task) => taskIdFromTaskRecord(task) === taskId)
+}
+
+function resultTerminalStatus(resultText: string | undefined, taskId: string): boolean {
+  const parsed = parseJsonRecord(resultText)
+  if (!parsed) return false
+
+  const task = taskIdFromTaskRecord(parsed.task) === taskId
+    ? parsed.task
+    : taskIdFromTaskRecord(parsed) === taskId
+      ? parsed
+      : undefined
+  const status = statusFromTaskRecord(task)
+  return status ? TASK_OUTPUT_TERMINAL_STATUSES.has(status) : false
+}
+
+function toolCallMatchesTask(toolCall: PersistedTaskToolCall | undefined, resultText: string | undefined, taskId: string): boolean {
+  if (!toolCall) return false
+  if (toolCall.id === taskId) return true
+  if (taskIdFromToolInput(toolCall.input) === taskId) return true
+  return resultReferencesTask(resultText, taskId)
+}
+
+function isTaskOutputComplete(toolCall: PersistedTaskToolCall | undefined, resultText: string | undefined, taskId: string): boolean {
+  const inputStatus = toolCall ? stringValue(toolCall.input.status) : undefined
+  if (inputStatus && TASK_OUTPUT_TERMINAL_STATUSES.has(inputStatus)) return true
+  if (toolCall?.name === 'TaskOutput') return true
+  return resultTerminalStatus(resultText, taskId)
+}
+
+function findTaskOutputInMessages(messages: SDKMessage[], taskId: string): TaskOutputCandidate | null {
+  const toolCalls = new Map<string, PersistedTaskToolCall>()
+  let candidate: TaskOutputCandidate | null = null
+
+  for (const message of messages) {
+    if (message.type === 'assistant') {
+      const assistantMessage = message as SDKAssistantMessage
+      const content = assistantMessage.message?.content
+      if (!Array.isArray(content)) continue
+
+      for (const block of content) {
+        if (block.type !== 'tool_use') continue
+        const toolUse = block as SDKToolUseBlock
+        toolCalls.set(toolUse.id, {
+          id: toolUse.id,
+          name: toolUse.name,
+          input: toolUse.input,
+        })
+      }
+      continue
+    }
+
+    if (message.type !== 'user') continue
+    const userMessage = message as SDKUserMessage
+    const content = userMessage.message?.content
+    if (!Array.isArray(content)) continue
+
+    for (const block of content) {
+      if (block.type !== 'tool_result') continue
+      const resultBlock = block as SDKToolResultBlock
+      const toolCall = toolCalls.get(resultBlock.tool_use_id)
+      const resultText = extractPersistedToolResultText(userMessage, resultBlock)
+      if (!toolCallMatchesTask(toolCall, resultText, taskId)) continue
+
+      candidate = {
+        output: resultText ?? '',
+        isComplete: isTaskOutputComplete(toolCall, resultText, taskId),
+      }
+    }
+  }
+
+  return candidate
+}
+
+export function getAgentTaskOutput(input: GetTaskOutputInput): GetTaskOutputResult {
+  const taskId = input.taskId.trim()
+  if (!taskId) return { output: '', isComplete: false }
+
+  for (const session of listAgentSessions()) {
+    const candidate = findTaskOutputInMessages(getAgentSessionSDKMessages(session.id), taskId)
+    if (candidate) return candidate
+  }
+
+  return {
+    output: '',
+    isComplete: false,
+  }
+}
+
 /**
  * 将旧的 AgentMessage 转换为近似的 SDKMessage（向后兼容）
  *
@@ -381,7 +574,7 @@ function convertLegacyMessage(legacy: AgentMessage): SDKMessage {
  */
 export function updateAgentSessionMeta(
   id: string,
-  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'sdkSessionId' | 'workspaceId' | 'pinned' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode'>>,
+  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'sdkSessionId' | 'workspaceId' | 'pinned' | 'archived' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'forkSourceSdkSessionId' | 'forkSourcePiSessionId' | 'forkSourcePiSessionPath' | 'resumeAtMessageUuid' | 'stoppedByUser' | 'permissionMode'>>,
 ): AgentSessionMeta {
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)
@@ -453,6 +646,10 @@ export function deleteAgentSession(id: string): void {
 
   // 清理 Nano Banana 生图历史
   clearNanoBananaAgentHistory(id)
+
+  if (resolveExistingSessionAgentEngine({ session: removed }) === 'pi') {
+    deletePiSessionFiles(removed.id)
+  }
 
   // 清理 SDK 关联数据（file-history 和 projects 下的 session JSONL）
   const sdkSessionIds = [removed.sdkSessionId, removed.forkSourceSdkSessionId].filter(Boolean) as string[]
@@ -629,6 +826,10 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
   const sourceMeta = getAgentSessionMeta(sessionId)
   if (!sourceMeta) {
     throw new Error(`源 Agent 会话不存在: ${sessionId}`)
+  }
+
+  if (resolveExistingSessionAgentEngine({ session: sourceMeta }) === 'pi') {
+    return forkPiAgentSession(sourceMeta, upToMessageUuid)
   }
 
   if (!sourceMeta.sdkSessionId) {
@@ -834,6 +1035,507 @@ export async function forkAgentSession(input: ForkSessionInput): Promise<AgentSe
   return newMeta
 }
 
+function getSessionWorkspaceDir(meta: AgentSessionMeta): string | undefined {
+  if (!meta.workspaceId) return undefined
+  const workspace = getAgentWorkspace(meta.workspaceId)
+  return workspace ? getAgentSessionWorkspacePath(workspace.slug, meta.id) : undefined
+}
+
+function copySessionWorkspaceFiles(sourceDir: string, destDir: string): void {
+  if (!existsSync(sourceDir)) return
+  if (!existsSync(destDir)) mkdirSync(destDir, { recursive: true })
+
+  const skip = (entry: string) => entry === '.claude' || entry === '.DS_Store' || entry === '.git'
+  let copiedCount = 0
+  for (const entry of readdirSync(sourceDir)) {
+    if (skip(entry)) continue
+    cpSync(join(sourceDir, entry), join(destDir, entry), { recursive: true })
+    copiedCount += 1
+  }
+
+  console.log(`[Agent 会话] 已复制 Pi 工作区文件: ${sourceDir} → ${destDir} (${copiedCount} 个条目)`)
+}
+
+function getPiSessionDir(): string {
+  const sessionDir = join(getConfigDir(), 'pi-agent-sessions')
+  if (!existsSync(sessionDir)) mkdirSync(sessionDir, { recursive: true })
+  return sessionDir
+}
+
+function extractPiSessionIdFromFileName(filePath: string): string | null {
+  const fileName = basename(filePath)
+  if (!fileName.endsWith('.jsonl')) return null
+
+  const withoutExt = fileName.slice(0, -'.jsonl'.length)
+  const marker = 'Z_'
+  const markerIndex = withoutExt.indexOf(marker)
+  if (markerIndex >= 0) {
+    const id = withoutExt.slice(markerIndex + marker.length)
+    return id || null
+  }
+
+  const underscoreIndex = withoutExt.indexOf('_')
+  if (underscoreIndex < 0) return withoutExt || null
+  const id = withoutExt.slice(underscoreIndex + 1)
+  return id || null
+}
+
+function extractPiTextContent(value: unknown): string | undefined {
+  if (typeof value === 'string') return value
+  if (!Array.isArray(value)) return undefined
+
+  const parts: string[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const block = item as Record<string, unknown>
+    if (block.type === 'text' && typeof block.text === 'string') {
+      parts.push(block.text)
+    }
+  }
+
+  return parts.join(' ')
+}
+
+function normalizePiNativePreview(text: string | undefined): string | undefined {
+  const normalized = text?.replace(/\s+/g, ' ').trim()
+  return normalized || undefined
+}
+
+interface PiNativeTreeEntry {
+  id: string
+  parentId: string | null
+}
+
+function countPiNativeBranchEntries(entries: Map<string, PiNativeTreeEntry>, leafEntryId: string | undefined): number | undefined {
+  if (!leafEntryId) return undefined
+
+  let count = 0
+  let current = entries.get(leafEntryId)
+  const visited = new Set<string>()
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id)
+    count += 1
+    current = current.parentId ? entries.get(current.parentId) : undefined
+  }
+
+  return count > 0 ? count : undefined
+}
+
+function parsePiNativeSessionFile(filePath: string): PiNativeSessionSummary | null {
+  try {
+    const stat = statSync(filePath)
+    const lines = readFileSync(filePath, 'utf-8')
+      .split(/\r?\n/)
+      .filter((line) => line.trim().length > 0)
+
+    let header: Record<string, unknown> | null = null
+    let firstUserMessage: string | undefined
+    let lastMessagePreview: string | undefined
+    let sessionName: string | undefined
+    let leafEntryId: string | undefined
+    let messageCount = 0
+    const treeEntries = new Map<string, PiNativeTreeEntry>()
+
+    for (const line of lines) {
+      const entry = JSON.parse(line) as unknown
+      if (!entry || typeof entry !== 'object') continue
+      const record = entry as Record<string, unknown>
+
+      if (record.type === 'session' && !header) {
+        header = record
+        continue
+      }
+
+      const entryId = typeof record.id === 'string' && record.id.trim()
+        ? record.id.trim()
+        : undefined
+      if (entryId) {
+        const parentId = typeof record.parentId === 'string' && record.parentId.trim()
+          ? record.parentId.trim()
+          : null
+        treeEntries.set(entryId, { id: entryId, parentId })
+        leafEntryId = entryId
+      }
+
+      if (record.type === 'session_info') {
+        const name = typeof record.name === 'string'
+          ? normalizePiNativePreview(record.name)
+          : undefined
+        if (name) {
+          sessionName = name
+        }
+        continue
+      }
+
+      if (record.type !== 'message') continue
+      messageCount += 1
+
+      const message = record.message
+      if (!message || typeof message !== 'object') continue
+      const messageRecord = message as Record<string, unknown>
+      const messagePreview = normalizePiNativePreview(extractPiTextContent(messageRecord.content))
+      if (messagePreview) {
+        lastMessagePreview = messagePreview
+      }
+
+      if (!firstUserMessage && messageRecord.role === 'user') {
+        firstUserMessage = messagePreview
+      }
+    }
+
+    const headerId = typeof header?.id === 'string' && header.id.trim()
+      ? header.id.trim()
+      : undefined
+    const fileNameId = extractPiSessionIdFromFileName(filePath) ?? undefined
+    const id = headerId ?? fileNameId
+    if (!id) return null
+
+    const timestamp = typeof header?.timestamp === 'string'
+      ? Date.parse(header.timestamp)
+      : Number.NaN
+    const version = typeof header?.version === 'number'
+      ? header.version
+      : undefined
+    const cwd = typeof header?.cwd === 'string' && header.cwd.trim()
+      ? header.cwd
+      : undefined
+    const parentSession = typeof header?.parentSession === 'string' && header.parentSession.trim()
+      ? header.parentSession
+      : undefined
+    const branchEntryCount = countPiNativeBranchEntries(treeEntries, leafEntryId)
+
+    return {
+      id,
+      path: filePath,
+      ...(version !== undefined ? { version } : {}),
+      ...(cwd ? { cwd } : {}),
+      ...(parentSession ? { parentSession } : {}),
+      ...(sessionName ? { sessionName } : {}),
+      ...(leafEntryId ? { leafEntryId } : {}),
+      ...(branchEntryCount !== undefined ? { branchEntryCount } : {}),
+      ...(Number.isFinite(timestamp) ? { createdAt: timestamp } : {}),
+      updatedAt: stat.mtimeMs,
+      ...(firstUserMessage ? { firstUserMessage } : {}),
+      ...(lastMessagePreview ? { lastMessagePreview } : {}),
+      messageCount,
+    }
+  } catch (error) {
+    console.warn(`[Agent 会话] 解析 Pi 原生 session 文件失败，已跳过: ${filePath}`, error)
+    return null
+  }
+}
+
+export function listPiNativeSessions(): PiNativeSessionSummary[] {
+  const sessionDir = getPiSessionDir()
+  const summaries = readdirSync(sessionDir)
+    .filter((entry) => entry.endsWith('.jsonl'))
+    .map((entry) => parsePiNativeSessionFile(join(sessionDir, entry)))
+    .filter((summary): summary is PiNativeSessionSummary => summary !== null)
+
+  summaries.sort((a, b) => b.updatedAt - a.updatedAt)
+  return summaries
+}
+
+export function loadPiNativeSessionSDKMessages(sessionPath: string, sessionId: string, leafEntryId?: string): SDKMessage[] {
+  try {
+    const entries = readFileSync(sessionPath, 'utf-8')
+      .split(/\r?\n/)
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as unknown)
+
+    return convertPiNativeSessionEntriesToSDKMessages({
+      sessionId,
+      entries,
+      leafEntryId,
+    })
+  } catch (error) {
+    console.warn(`[Agent 会话] 读取 Pi 原生 session 历史失败: ${sessionPath}`, error)
+    throw new Error('读取 Pi 原生 session 历史失败')
+  }
+}
+
+function getPiEntryId(message: SDKMessage): string | undefined {
+  const value = (message as { _promaPiEntryId?: unknown })._promaPiEntryId
+  return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+export function syncPiNativeSessionMessages(input: SyncPiNativeSessionMessagesInput): SyncPiNativeSessionMessagesResult {
+  const meta = getAgentSessionMeta(input.sessionId)
+  if (!meta) {
+    throw new Error(`Agent 会话不存在: ${input.sessionId}`)
+  }
+
+  if (resolveExistingSessionAgentEngine({ session: meta }) !== 'pi') {
+    throw new Error('仅支持 Pi Agent 会话同步 Pi 原生历史')
+  }
+
+  const sessionPath = input.sessionPath?.trim()
+  if (!sessionPath) {
+    throw new Error('Pi 原生 session 文件路径不能为空')
+  }
+
+  const convertedMessages = loadPiNativeSessionSDKMessages(sessionPath, input.sessionId, input.leafEntryId)
+  const existingPiEntryIds = new Set(
+    getAgentSessionSDKMessages(input.sessionId)
+      .map((message) => getPiEntryId(message))
+      .filter((entryId): entryId is string => Boolean(entryId)),
+  )
+
+  const messagesToAppend: SDKMessage[] = []
+  let skippedCount = 0
+  for (const message of convertedMessages) {
+    const entryId = getPiEntryId(message)
+    if (entryId && existingPiEntryIds.has(entryId)) {
+      skippedCount += 1
+      continue
+    }
+    if (entryId) existingPiEntryIds.add(entryId)
+    messagesToAppend.push(message)
+  }
+
+  appendSDKMessages(input.sessionId, messagesToAppend)
+
+  const result: SyncPiNativeSessionMessagesResult = {
+    importedCount: messagesToAppend.length,
+    skippedCount,
+    totalCount: convertedMessages.length,
+  }
+  console.log(
+    `[Agent 会话] 已同步 Pi 原生历史: session=${input.sessionId}, imported=${result.importedCount}, skipped=${result.skippedCount}, total=${result.totalCount}`,
+  )
+  return result
+}
+
+function findPiSessionFile(sessionId: string): string | null {
+  const sessionDir = getPiSessionDir()
+  const candidates = readdirSync(sessionDir)
+    .filter((entry) => entry.endsWith('.jsonl') && extractPiSessionIdFromFileName(entry) === sessionId)
+    .map((entry) => join(sessionDir, entry))
+
+  if (candidates.length === 0) return null
+  candidates.sort((a, b) => {
+    const aMtime = existsSync(a) ? statSync(a).mtimeMs : 0
+    const bMtime = existsSync(b) ? statSync(b).mtimeMs : 0
+    return bMtime - aMtime
+  })
+  return candidates[0] ?? null
+}
+
+function findPiSessionFileForMeta(meta: AgentSessionMeta): string | null {
+  if (meta.forkSourcePiSessionPath && existsSync(meta.forkSourcePiSessionPath)) {
+    return meta.forkSourcePiSessionPath
+  }
+
+  return findPiSessionFile(meta.id)
+}
+
+function deletePiSessionFiles(sessionId: string): void {
+  const sessionDir = getPiSessionDir()
+  const files = readdirSync(sessionDir)
+    .filter((entry) => entry.endsWith('.jsonl') && extractPiSessionIdFromFileName(entry) === sessionId)
+
+  for (const file of files) {
+    const filePath = join(sessionDir, file)
+    try {
+      unlinkSync(filePath)
+      console.log(`[Agent 会话] 已清理 Pi 原生 session 文件: ${filePath}`)
+    } catch (error) {
+      console.warn(`[Agent 会话] 清理 Pi 原生 session 文件失败 (${filePath}):`, error)
+    }
+  }
+}
+
+export function createPiNativeRewindSession(input: {
+  sourceMeta: AgentSessionMeta
+  targetEntryId: string
+}): { sourcePiSessionId: string; sourcePiSessionPath: string; rewindPiSessionPath: string } | null {
+  const sourcePiSessionPath = findPiSessionFileForMeta(input.sourceMeta)
+  if (!sourcePiSessionPath) return null
+
+  const sourceLines = readFileSync(sourcePiSessionPath, 'utf-8')
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+  if (sourceLines.length === 0) return null
+
+  const sourceEntries = sourceLines.map((line) => JSON.parse(line) as Record<string, unknown>)
+  const sourceHeader = sourceEntries.find((entry) => entry.type === 'session')
+  if (!sourceHeader) return null
+
+  const timestamp = new Date().toISOString()
+  const rewindPiSessionPath = join(
+    getPiSessionDir(),
+    `${timestamp.replace(/[:.]/g, '-')}_rewind_${input.sourceMeta.id}.jsonl`,
+  )
+  const targetHeader = {
+    ...sourceHeader,
+    id: input.sourceMeta.id,
+    timestamp,
+    parentSession: sourcePiSessionPath,
+  }
+  const sourceMessageEntries = selectPiNativeForkEntries(
+    sourceEntries.filter((entry) => entry.type !== 'session'),
+    input.targetEntryId,
+  )
+  const rewindLines = [
+    JSON.stringify(targetHeader),
+    ...sourceMessageEntries.map((entry) => JSON.stringify(entry)),
+  ]
+  writeFileSync(rewindPiSessionPath, `${rewindLines.join('\n')}\n`, { flag: 'wx' })
+
+  return {
+    sourcePiSessionId: extractPiSessionIdFromFileName(sourcePiSessionPath) ?? input.sourceMeta.id,
+    sourcePiSessionPath,
+    rewindPiSessionPath,
+  }
+}
+
+async function forkPiNativeSession(input: {
+  sourceMeta: AgentSessionMeta
+  targetMeta: AgentSessionMeta
+  targetCwd: string
+  upToMessageUuid?: string
+}): Promise<{ sourcePiSessionId: string; sourcePiSessionPath: string; forkedPiSessionPath: string } | null> {
+  const sourcePiSessionPath = findPiSessionFileForMeta(input.sourceMeta)
+  if (!sourcePiSessionPath) return null
+
+  const sessionDir = getPiSessionDir()
+  const sourceLines = readFileSync(sourcePiSessionPath, 'utf-8')
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+  if (sourceLines.length === 0) return null
+
+  const sourceEntries = sourceLines.map((line) => JSON.parse(line) as Record<string, unknown>)
+  const sourceHeader = sourceEntries.find((entry) => entry.type === 'session')
+  if (!sourceHeader) return null
+
+  const timestamp = new Date().toISOString()
+  const forkedPiSessionPath = join(
+    sessionDir,
+    `${timestamp.replace(/[:.]/g, '-')}_${input.targetMeta.id}.jsonl`,
+  )
+  const targetHeader = {
+    ...sourceHeader,
+    id: input.targetMeta.id,
+    timestamp,
+    cwd: input.targetCwd,
+    parentSession: sourcePiSessionPath,
+  }
+  const sourceMessageEntries = selectPiNativeForkEntries(
+    sourceEntries.filter((entry) => entry.type !== 'session'),
+    input.upToMessageUuid,
+  )
+  const forkedLines = [
+    JSON.stringify(targetHeader),
+    ...sourceMessageEntries.map((entry) => JSON.stringify(entry)),
+  ]
+  writeFileSync(forkedPiSessionPath, `${forkedLines.join('\n')}\n`, { flag: 'wx' })
+
+  return {
+    sourcePiSessionId: input.sourceMeta.id,
+    sourcePiSessionPath,
+    forkedPiSessionPath,
+  }
+}
+
+function selectPiNativeForkEntries(
+  entries: Array<Record<string, unknown>>,
+  upToMessageUuid?: string,
+): Array<Record<string, unknown>> {
+  if (!upToMessageUuid) return entries
+
+  const cutIndex = entries.findIndex((entry) => entry.id === upToMessageUuid)
+  if (cutIndex < 0) return entries
+
+  // Pi session 是 tree，而不是纯线性 transcript。命中 entry id 时优先只复制该 entry
+  // 的祖先路径，避免把同一父节点下的 sibling branch 带进新 fork。
+  const byId = new Map<string, Record<string, unknown>>()
+  for (const entry of entries) {
+    if (typeof entry.id === 'string') byId.set(entry.id, entry)
+  }
+
+  const pathIds = new Set<string>()
+  let cursor: Record<string, unknown> | undefined = entries[cutIndex]
+  while (cursor) {
+    const id = typeof cursor.id === 'string' ? cursor.id : undefined
+    if (!id) break
+    pathIds.add(id)
+    const parentId = typeof cursor.parentId === 'string' ? cursor.parentId : undefined
+    if (!parentId) break
+    const parent = byId.get(parentId)
+    if (!parent) {
+      return entries.slice(0, cutIndex + 1)
+    }
+    cursor = parent
+  }
+
+  return entries.filter((entry) => typeof entry.id === 'string' && pathIds.has(entry.id))
+}
+
+function matchesRuntimeMessageTarget(message: SDKMessage, targetId: string): boolean {
+  const record = message as Record<string, unknown>
+  return record.uuid === targetId || record._promaPiEntryId === targetId
+}
+
+function selectForkedMessages(messages: SDKMessage[], upToMessageUuid?: string): SDKMessage[] {
+  if (!upToMessageUuid) return messages
+
+  const cutIndex = messages.findIndex((message) => matchesRuntimeMessageTarget(message, upToMessageUuid))
+  if (cutIndex < 0) {
+    throw new Error('未在会话历史中找到指定的消息，可能消息已被清理或截断')
+  }
+
+  return messages.slice(0, cutIndex + 1)
+}
+
+async function forkPiAgentSession(sourceMeta: AgentSessionMeta, upToMessageUuid?: string): Promise<AgentSessionMeta> {
+  const forkTitle = `${sourceMeta.title} (fork)`
+  let newMeta = createAgentSession(
+    forkTitle,
+    sourceMeta.channelId,
+    sourceMeta.workspaceId,
+    'pi',
+  )
+
+  const sourceDir = getSessionWorkspaceDir(sourceMeta)
+  const destDir = getSessionWorkspaceDir(newMeta)
+  if (sourceDir && destDir) {
+    try {
+      copySessionWorkspaceFiles(sourceDir, destDir)
+    } catch (error) {
+      console.warn('[Agent 会话] 复制 Pi 工作区文件失败:', error)
+    }
+
+    try {
+      const nativeFork = await forkPiNativeSession({
+        sourceMeta,
+        targetMeta: newMeta,
+        targetCwd: destDir,
+        upToMessageUuid,
+      })
+      if (nativeFork) {
+        newMeta = updateAgentSessionMeta(newMeta.id, {
+          forkSourcePiSessionId: nativeFork.sourcePiSessionId,
+          forkSourcePiSessionPath: nativeFork.sourcePiSessionPath,
+        })
+        console.log(`[Agent 会话] 已创建 Pi 原生 fork session: ${nativeFork.forkedPiSessionPath}`)
+      } else {
+        console.warn(`[Agent 会话] 未找到源 Pi 原生 session 文件，保留 Proma 层 fork fallback: ${sourceMeta.id}`)
+      }
+    } catch (error) {
+      console.warn('[Agent 会话] 创建 Pi 原生 fork session 失败，保留 Proma 层 fork fallback:', error)
+    }
+  }
+
+  let messagesToCopy = selectForkedMessages(getAgentSessionSDKMessages(sourceMeta.id), upToMessageUuid)
+  if (sourceDir && destDir && messagesToCopy.length > 0) {
+    messagesToCopy = messagesToCopy.map((message) => rewritePathsInSDKMessage(message, sourceDir, destDir))
+  }
+  appendSDKMessages(newMeta.id, messagesToCopy)
+
+  console.log(`[Agent 会话] 分叉 Pi 会话已创建: ${sourceMeta.title} → ${forkTitle} (${messagesToCopy.length} 条消息)`)
+  return newMeta
+}
+
 /**
  * 将一段字符串中所有出现的 sourceDir 替换为 destDir。
  *
@@ -904,11 +1606,9 @@ function rewritePathsInSDKMessage(msg: SDKMessage, sourceDir: string, destDir: s
  */
 export function truncateSDKMessages(id: string, upToUuidInclusive: string): SDKMessage[] {
   const messages = getAgentSessionSDKMessages(id)
-  const cutIndex = messages.findIndex(
-    (m) => 'uuid' in m && (m as { uuid?: string }).uuid === upToUuidInclusive,
-  )
+  const cutIndex = messages.findIndex((message) => matchesRuntimeMessageTarget(message, upToUuidInclusive))
   if (cutIndex < 0) {
-    throw new Error(`[Agent 会话] 截断失败: 未找到 uuid=${upToUuidInclusive}, sessionId=${id}`)
+    throw new Error(`[Agent 会话] 截断失败: 未找到消息标识=${upToUuidInclusive}, sessionId=${id}`)
   }
   const kept = messages.slice(0, cutIndex + 1)
 

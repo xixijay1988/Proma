@@ -236,6 +236,8 @@ export interface SDKAssistantMessage {
   isReplay?: boolean
   /** 渠道配置的模型 ID，持久化/流式期间注入，用于正确匹配模型显示名 */
   _channelModelId?: string
+  /** Pi 原生 session tree entry id，用于后续 Pi native fork/rewind 映射 */
+  _promaPiEntryId?: string
 }
 
 /** SDK user 消息 */
@@ -252,6 +254,8 @@ export interface SDKUserMessage {
   isReplay?: boolean
   /** SDK 合成的消息（如 Skill 展开 prompt），非人类用户输入 */
   isSynthetic?: boolean
+  /** Pi 原生 session tree entry id，用于后续 Pi native fork/rewind 映射 */
+  _promaPiEntryId?: string
 }
 
 /** SDK result 消息（查询结束时返回） */
@@ -581,6 +585,10 @@ export interface AgentSessionMeta {
   forkSourceDir?: string
   /** 分叉来源：源会话的 SDK session ID（用于 rewind 时读取源会话的 file-history-snapshot 和备份文件） */
   forkSourceSdkSessionId?: string
+  /** 分叉来源：源会话的 Pi 原生 session ID（用于 Pi session tree parity） */
+  forkSourcePiSessionId?: string
+  /** 分叉来源：源会话的 Pi 原生 session JSONL 路径 */
+  forkSourcePiSessionPath?: string
   /** 回退后的 resume 截断点：下次发消息时传给 SDK resumeSessionAt（消费后清除） */
   resumeAtMessageUuid?: string
   /** 手动标记为工作中 */
@@ -876,6 +884,90 @@ export interface RewindSessionInput {
   assistantMessageUuid: string
 }
 
+/** 应用 Pi git checkpoint 输入 */
+export interface ApplyPiGitCheckpointInput {
+  /** Proma 会话 ID */
+  sessionId: string
+  /** Pi entry id；通常来自回退目标或回退结果里的 checkpoint target */
+  targetEntryId: string
+}
+
+/** 切换活跃 runtime 原生会话输入 */
+export interface SwitchActiveSessionInput {
+  /** Proma 会话 ID */
+  sessionId: string
+  /** Runtime 原生 session JSONL 文件路径 */
+  sessionPath: string
+}
+
+/** 设置 Pi 原生 session 文件供下次运行恢复 */
+export interface SetPiSessionFileInput {
+  /** Proma 会话 ID */
+  sessionId: string
+  /** Pi 原生 session JSONL 文件路径 */
+  sessionPath: string
+}
+
+/** 读取 Pi 原生 session 历史并转换为 Proma SDKMessage 输入 */
+export interface LoadPiNativeSessionMessagesInput {
+  /** Proma 会话 ID（仅用于转换后的 session_id） */
+  sessionId: string
+  /** Pi 原生 session JSONL 文件路径 */
+  sessionPath: string
+  /** 可选 Pi entry leaf id；提供后只转换该 leaf 到 root 的 branch path */
+  leafEntryId?: string
+}
+
+/** 将 Pi 原生 session 历史同步写入 Proma 会话输入 */
+export interface SyncPiNativeSessionMessagesInput {
+  /** Proma 会话 ID */
+  sessionId: string
+  /** Pi 原生 session JSONL 文件路径；运行中的 Pi 会话可省略，改从 active runtime 快照同步 */
+  sessionPath?: string
+  /** 可选 Pi entry leaf id；提供后只同步该 leaf 到 root 的 branch path */
+  leafEntryId?: string
+}
+
+/** Pi 原生历史同步结果 */
+export interface SyncPiNativeSessionMessagesResult {
+  /** 本次新追加到 Proma JSONL 的消息数 */
+  importedCount: number
+  /** 因 _promaPiEntryId 已存在而跳过的消息数 */
+  skippedCount: number
+  /** Pi 原生历史中可转换的 Proma 消息总数 */
+  totalCount: number
+}
+
+/** Pi 原生 session JSONL 摘要 */
+export interface PiNativeSessionSummary {
+  /** Pi 原生 session ID */
+  id: string
+  /** 原生 JSONL 文件路径 */
+  path: string
+  /** session header 版本 */
+  version?: number
+  /** session cwd */
+  cwd?: string
+  /** 父 session 文件路径 */
+  parentSession?: string
+  /** Pi session_info 中的显示名 */
+  sessionName?: string
+  /** 静态解析得到的叶子 entry id（等同 Pi 加载文件时的 fallback leaf） */
+  leafEntryId?: string
+  /** 从 leaf 回溯到 root 的 entry 数 */
+  branchEntryCount?: number
+  /** header timestamp */
+  createdAt?: number
+  /** 文件更新时间 */
+  updatedAt: number
+  /** 首条用户消息文本预览 */
+  firstUserMessage?: string
+  /** 最后一条可展示消息文本预览 */
+  lastMessagePreview?: string
+  /** message entry 数量 */
+  messageCount: number
+}
+
 /** 快照回退结果 */
 export interface RewindSessionResult {
   /** 截断后剩余的消息数 */
@@ -887,6 +979,27 @@ export interface RewindSessionResult {
     filesChanged?: string[]
     insertions?: number
     deletions?: number
+    checkpoint?: {
+      entryId: string
+      targetEntryId: string
+      gitRef: string
+      cwd?: string
+      createdAt?: string
+    }
+  }
+}
+
+/** 应用 Pi git checkpoint 结果 */
+export interface ApplyPiGitCheckpointResult {
+  restored: boolean
+  error?: string
+  filesChanged?: string[]
+  checkpoint?: {
+    entryId: string
+    targetEntryId: string
+    gitRef: string
+    cwd?: string
+    createdAt?: string
   }
 }
 
@@ -1262,8 +1375,20 @@ export const AGENT_IPC_CHANNELS = {
   MOVE_SESSION_TO_WORKSPACE: 'agent:move-session-to-workspace',
   /** 分叉会话（从指定消息处创建新会话） */
   FORK_SESSION: 'agent:fork-session',
+  /** 克隆活跃 runtime 会话（Pi 原生 session tree） */
+  CLONE_ACTIVE_SESSION: 'agent:clone-active-session',
+  /** 切换活跃 runtime 原生会话文件（Pi 原生 session tree） */
+  SWITCH_ACTIVE_SESSION: 'agent:switch-active-session',
+  /** 列出 Pi 原生 session JSONL 摘要 */
+  LIST_PI_NATIVE_SESSIONS: 'agent:list-pi-native-sessions',
+  /** 读取 Pi 原生 session 历史并转换为 Proma SDKMessage */
+  LOAD_PI_NATIVE_SESSION_MESSAGES: 'agent:load-pi-native-session-messages',
+  /** 将 Pi 原生 session 历史同步写入 Proma 会话 */
+  SYNC_PI_NATIVE_SESSION_MESSAGES: 'agent:sync-pi-native-session-messages',
   /** 快照回退（同一会话内回退到指定点，恢复文件 + 截断对话） */
   REWIND_SESSION: 'agent:rewind-session',
+  /** 应用 Pi git checkpoint（显式恢复文件） */
+  APPLY_PI_GIT_CHECKPOINT: 'agent:apply-pi-git-checkpoint',
 
   // 工作区管理
   /** 获取工作区列表 */
@@ -1350,6 +1475,10 @@ export const AGENT_IPC_CHANNELS = {
   GET_WORKSPACE_FILES_PATH: 'agent:get-workspace-files-path',
   /** 打开文件夹选择对话框 */
   OPEN_FOLDER_DIALOG: 'agent:open-folder-dialog',
+  /** 打开 Pi native session JSONL 文件选择对话框（只返回路径，不读取内容） */
+  OPEN_PI_SESSION_FILE_DIALOG: 'agent:open-pi-session-file-dialog',
+  /** 设置 Pi native session JSONL 文件供下次运行恢复 */
+  SET_PI_SESSION_FILE_FOR_NEXT_RUN: 'agent:set-pi-session-file-for-next-run',
   /** 附加外部目录到 Agent 会话 */
   ATTACH_DIRECTORY: 'agent:attach-directory',
   /** 移除会话的附加目录 */

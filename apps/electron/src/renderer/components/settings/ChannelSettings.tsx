@@ -3,8 +3,7 @@
  *
  * 分为两个区块：
  * 1. 渠道管理 — 所有渠道列表 + 添加/编辑/删除（渠道同时用于 Chat 和 Agent）
- * 2. Agent 供应商 — 从已启用的 Anthropic 兼容渠道（Anthropic / DeepSeek / Kimi / MiniMax）中
- *    通过 Switch 开关启用多个 Agent 供应商
+ * 2. Agent 供应商 — 按当前工作区 runtime 展示可用于 Agent 的已启用渠道
  */
 
 import * as React from 'react'
@@ -12,10 +11,10 @@ import { useAtom, useSetAtom } from 'jotai'
 import { Plus, Pencil, Trash2, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { PROVIDER_LABELS, isAgentCompatibleProvider } from '@proma/shared'
-import type { Channel } from '@proma/shared'
+import { PROVIDER_LABELS, isProviderCompatibleWithAgentEngine } from '@proma/shared'
+import type { AgentEngine, Channel } from '@proma/shared'
 import { getChannelLogo, PromaLogo } from '@/lib/model-logo'
-import { agentChannelIdAtom, agentModelIdAtom, agentChannelIdsAtom } from '@/atoms/agent-atoms'
+import { agentChannelIdAtom, agentModelIdAtom, agentChannelIdsAtom, agentWorkspacesAtom, currentAgentWorkspaceIdAtom } from '@/atoms/agent-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { SettingsSection, SettingsCard, SettingsRow } from './primitives'
 import {
@@ -41,10 +40,15 @@ export function ChannelSettings(): React.ReactElement {
   const [agentChannelId, setAgentChannelId] = useAtom(agentChannelIdAtom)
   const [, setAgentModelId] = useAtom(agentModelIdAtom)
   const [agentChannelIds, setAgentChannelIds] = useAtom(agentChannelIdsAtom)
+  const [agentWorkspaces] = useAtom(agentWorkspacesAtom)
+  const [currentWorkspaceId] = useAtom(currentAgentWorkspaceIdAtom)
   const setGlobalChannels = useSetAtom(channelsAtom)
   const [deleteTarget, setDeleteTarget] = React.useState<Channel | null>(null)
   const agentChannelIdsRef = React.useRef(agentChannelIds)
   const agentChannelIdRef = React.useRef(agentChannelId)
+  const currentWorkspace = agentWorkspaces.find((workspace) => workspace.id === currentWorkspaceId)
+  const currentAgentEngine: AgentEngine = currentWorkspace?.agentEngine ?? 'claude-sdk'
+  const agentRuntimeLabel = currentAgentEngine === 'pi' ? 'Pi Agent' : 'Claude SDK Agent'
 
   React.useEffect(() => {
     agentChannelIdsRef.current = agentChannelIds
@@ -147,7 +151,7 @@ export function ChannelSettings(): React.ReactElement {
       const savedChannel = await window.electronAPI.updateChannel(channel.id, { enabled: !channel.enabled })
       await syncAgentChannelEligibility(
         savedChannel,
-        savedChannel.enabled && isAgentCompatibleProvider(savedChannel.provider),
+        savedChannel.enabled && isProviderCompatibleWithAgentEngine(currentAgentEngine, savedChannel.provider),
       )
 
       await loadChannels()
@@ -197,6 +201,7 @@ export function ChannelSettings(): React.ReactElement {
     return (
       <ChannelForm
         channel={editingChannel}
+        agentEngine={currentAgentEngine}
         onSaved={handleFormSaved}
         onAgentEligibilityChange={syncAgentChannelEligibility}
         onCancel={handleFormCancel}
@@ -204,9 +209,9 @@ export function ChannelSettings(): React.ReactElement {
     )
   }
 
-  // Agent 兼容渠道（已启用）：Anthropic / DeepSeek / Kimi API / Kimi Coding Plan / MiniMax
+  // Agent 兼容渠道（已启用）：按当前工作区 runtime 判断。
   const agentCapableChannels = channels.filter(
-    (c) => isAgentCompatibleProvider(c.provider) && c.enabled
+    (c) => isProviderCompatibleWithAgentEngine(currentAgentEngine, c.provider) && c.enabled
   )
 
   // 列表视图
@@ -215,7 +220,7 @@ export function ChannelSettings(): React.ReactElement {
       {/* 区块一：模型配置 */}
       <SettingsSection
         title="模型配置"
-        description="管理 AI 供应商连接，配置 API Key 和可用模型。Anthropic 渠道同时可用于 Agent 模式"
+        description={`管理 AI 供应商连接，配置 API Key 和可用模型。当前工作区使用 ${agentRuntimeLabel}`}
         action={
           <Button size="sm" onClick={() => setViewMode('create')}>
             <Plus size={16} />
@@ -240,6 +245,7 @@ export function ChannelSettings(): React.ReactElement {
               <ChannelRow
                 key={channel.id}
                 channel={channel}
+                agentEngine={currentAgentEngine}
                 onEdit={() => {
                   setEditingChannel(channel)
                   setViewMode('edit')
@@ -265,7 +271,7 @@ export function ChannelSettings(): React.ReactElement {
         ) : agentCapableChannels.length === 0 ? (
           <SettingsCard divided={false}>
             <div className="text-sm text-muted-foreground py-8 text-center">
-              暂无可用的 Anthropic 兼容渠道，请先在上方添加 Anthropic / DeepSeek / Kimi / MiniMax 渠道并启用
+              暂无当前工作区 runtime 可用的 Agent 渠道，请先添加并启用兼容 {agentRuntimeLabel} 的渠道
             </div>
           </SettingsCard>
         ) : (
@@ -305,17 +311,19 @@ export function ChannelSettings(): React.ReactElement {
 
 interface ChannelRowProps {
   channel: Channel
+  agentEngine: AgentEngine
   onEdit: () => void
   onDelete: () => void
   onToggle: () => void
 }
 
-function ChannelRow({ channel, onEdit, onDelete, onToggle }: ChannelRowProps): React.ReactElement {
+function ChannelRow({ channel, agentEngine, onEdit, onDelete, onToggle }: ChannelRowProps): React.ReactElement {
   const enabledCount = channel.models.filter((m) => m.enabled).length
+  const agentRuntimeLabel = agentEngine === 'pi' ? 'Pi Agent' : 'Claude Agent'
   const description = [
     PROVIDER_LABELS[channel.provider],
     enabledCount > 0 ? `${enabledCount} 个模型已启用` : undefined,
-    isAgentCompatibleProvider(channel.provider) ? '可用于 Agent' : undefined,
+    isProviderCompatibleWithAgentEngine(agentEngine, channel.provider) ? `可用于 ${agentRuntimeLabel}` : undefined,
   ]
     .filter(Boolean)
     .join(' · ')

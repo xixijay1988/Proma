@@ -30,13 +30,13 @@ import { cn } from '@/lib/utils'
 import type { Channel, ModelOption } from '@proma/shared'
 
 /** 从渠道列表构建扁平化的模型选项 */
-function buildModelOptions(channels: Channel[], filterChannelId?: string, filterChannelIds?: string[]): ModelOption[] {
+export function buildModelOptions(channels: Channel[], filterChannelId?: string, filterChannelIds?: string[]): ModelOption[] {
   const options: ModelOption[] = []
 
   for (const channel of channels) {
     if (!channel.enabled) continue
     if (filterChannelId && channel.id !== filterChannelId) continue
-    if (filterChannelIds && filterChannelIds.length > 0 && !filterChannelIds.includes(channel.id)) continue
+    if (filterChannelIds !== undefined && !filterChannelIds.includes(channel.id)) continue
 
     for (const model of channel.models) {
       if (!model.enabled) continue

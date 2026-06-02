@@ -6,10 +6,11 @@ export type PiPermissionDangerLevel = 'low' | 'medium' | 'high'
 export interface PiPermissionInput {
   mode: PiPermissionMode
   toolName: string
+  toolDescription?: string
 }
 
 export type PiPermissionDecision =
-  | { behavior: 'allow'; requireScopeCheck?: true }
+  | { behavior: 'allow' }
   | { behavior: 'ask'; dangerLevel: PiPermissionDangerLevel }
 
 const WORKSPACE_SCOPED_READ_TOOLS = new Set([
@@ -24,6 +25,14 @@ const REMOTE_READ_TOOLS = new Set([
   'websearch',
 ])
 
+const PROGRESS_TOOLS = new Set([
+  'taskcreate',
+  'taskupdate',
+  'taskget',
+  'tasklist',
+  'todowrite',
+])
+
 const WRITE_TOOLS = new Set([
   'edit',
   'multiedit',
@@ -36,19 +45,59 @@ const SHELL_TOOLS = new Set([
   'shell',
 ])
 
+const MCP_READ_VERBS = new Set([
+  'fetch',
+  'find',
+  'get',
+  'inspect',
+  'list',
+  'lookup',
+  'query',
+  'read',
+  'search',
+])
+
+const MCP_MUTATION_WORDS = [
+  'append',
+  'create',
+  'delete',
+  'edit',
+  'execute',
+  'insert',
+  'modify',
+  'mutate',
+  'patch',
+  'remove',
+  'replace',
+  'run',
+  'send',
+  'update',
+  'upload',
+  'write',
+]
+
 export function mapPiToolPermission(input: PiPermissionInput): PiPermissionDecision {
   const mode = input.mode
   const toolName = normalizeToolName(input.toolName)
+  const rawToolName = input.toolName.trim().toLowerCase()
 
   if (mode === 'allow-all') {
-    if (REMOTE_READ_TOOLS.has(toolName)) {
-      return { behavior: 'allow' }
-    }
+    return { behavior: 'allow' }
+  }
 
-    return { behavior: 'allow', requireScopeCheck: true }
+  if (rawToolName.startsWith('mcp__') && rawToolName.endsWith('__list_tools')) {
+    return { behavior: 'allow' }
+  }
+
+  if (isReadLikeMcpRemoteTool(rawToolName, input.toolDescription)) {
+    return { behavior: 'allow' }
   }
 
   if (WORKSPACE_SCOPED_READ_TOOLS.has(toolName) || REMOTE_READ_TOOLS.has(toolName)) {
+    return { behavior: 'allow' }
+  }
+
+  if (PROGRESS_TOOLS.has(toolName)) {
     return { behavior: 'allow' }
   }
 
@@ -61,6 +110,20 @@ export function mapPiToolPermission(input: PiPermissionInput): PiPermissionDecis
   }
 
   return { behavior: 'ask', dangerLevel: 'medium' }
+}
+
+function isReadLikeMcpRemoteTool(toolName: string, description: string | undefined): boolean {
+  const parts = toolName.split('__')
+  if (parts.length < 3 || parts[0] !== 'mcp') return false
+  const mcpToolSegment = parts.slice(2).join('_')
+  if (mcpToolSegment === 'call_tool' || mcpToolSegment === 'list_tools') return false
+
+  const firstSegment = mcpToolSegment.split('_')[0] ?? ''
+  if (!MCP_READ_VERBS.has(firstSegment)) return false
+  if (!description?.trim()) return false
+
+  const descriptionText = description.toLowerCase()
+  return !MCP_MUTATION_WORDS.some((word) => descriptionText.includes(word))
 }
 
 export function mapPromaPermissionModeToPiMode(mode: PromaPermissionMode): PiPermissionMode {

@@ -2,8 +2,68 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
+import { PI_AGENT_COMPATIBLE_PROVIDERS } from '@proma/shared'
+import type { Channel, ProviderType } from '@proma/shared'
 
-import { preparePiRuntimeConfig, resolvePiProviderMappingForTest } from './pi-runtime-config'
+import {
+  ensurePiProviderDiagnosticExtensionForTest,
+  getPiRuntimeMappedProvidersForTest,
+  getPiRuntimeProviderContractsForTest,
+  preparePiRuntimeConfig,
+  resolvePiProviderMappingForTest,
+} from './pi-runtime-config'
+import { startPiRpcSession, type PiRpcEvent } from './pi-process'
+
+interface ModelsJsonShape {
+  providers?: Record<string, { baseUrl?: string; models?: Array<{ id?: string; name?: string }> }>
+}
+
+function buildChannel(provider: ProviderType): Channel {
+  return {
+    id: `channel-${provider}`,
+    name: provider,
+    provider,
+    baseUrl: `https://example.com/${provider}/v1`,
+    apiKey: '',
+    models: [],
+    enabled: true,
+    createdAt: 0,
+    updatedAt: 0,
+  }
+}
+
+function readModelsJson(configDir: string): ModelsJsonShape | null {
+  const modelsPath = join(configDir, 'models.json')
+  if (!existsSync(modelsPath)) return null
+  return JSON.parse(readFileSync(modelsPath, 'utf-8')) as ModelsJsonShape
+}
+
+interface PiRpcResponseEvent extends PiRpcEvent {
+  type: 'response'
+  command: string
+  success: boolean
+  data?: unknown
+}
+
+async function waitForPiRpcResponse(input: {
+  events: AsyncIterable<PiRpcEvent>
+  id: string
+  timeoutMs?: number
+}): Promise<PiRpcResponseEvent> {
+  const timeoutMs = input.timeoutMs ?? 10_000
+  const startedAt = Date.now()
+
+  for await (const event of input.events) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error(`等待 Pi RPC response 超时: ${input.id}`)
+    }
+    if (event.type === 'response' && event.id === input.id) {
+      return event as PiRpcResponseEvent
+    }
+  }
+
+  throw new Error(`Pi RPC 已结束但未返回 response: ${input.id}`)
+}
 
 describe('pi runtime config', () => {
   test('Given anthropic channel When preparing runtime config Then writes isolated models override and api key env', () => {
@@ -122,5 +182,89 @@ describe('pi runtime config', () => {
       apiKeyEnv: 'MOONSHOT_API_KEY',
       registerModel: true,
     })
+  })
+
+  test('Given Pi compatible providers When comparing UI contract with runtime mapping Then they stay in sync', () => {
+    expect(getPiRuntimeMappedProvidersForTest().toSorted()).toEqual([...PI_AGENT_COMPATIBLE_PROVIDERS].toSorted())
+  })
+
+  test('Given each Pi compatible provider When preparing runtime config Then provider env and model registration follow the runtime contract', () => {
+    for (const contract of getPiRuntimeProviderContractsForTest()) {
+      const homeDir = mkdtempSync(join(tmpdir(), 'proma-pi-runtime-matrix-'))
+      try {
+        const config = preparePiRuntimeConfig({
+          promaConfigDir: homeDir,
+          sessionId: `session-${contract.providerType}`,
+          channel: buildChannel(contract.providerType),
+          apiKey: `sk-${contract.providerType}`,
+          model: `${contract.providerType}/demo-model`,
+        })
+        const modelsJson = readModelsJson(config.configDir)
+        const providerConfig = modelsJson?.providers?.[contract.piProvider]
+
+        expect(config.provider).toBe(contract.piProvider)
+        expect(config.runtimeEnv[contract.apiKeyEnv]).toBe(`sk-${contract.providerType}`)
+        expect(providerConfig?.baseUrl).toBe(`https://example.com/${contract.providerType}/v1`)
+        if (contract.registerModel) {
+          expect(providerConfig?.models?.[0]).toEqual({ id: 'demo-model', name: 'demo-model' })
+        } else {
+          expect(providerConfig?.models).toBeUndefined()
+        }
+      } finally {
+        rmSync(homeDir, { recursive: true, force: true })
+      }
+    }
+  })
+
+  test('Given qwen provider config When real Pi RPC process starts Then diagnostic command description proves env and models config are visible', async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), 'proma-pi-provider-rpc-'))
+    let rpc: ReturnType<typeof startPiRpcSession> | null = null
+    try {
+      const config = preparePiRuntimeConfig({
+        promaConfigDir: homeDir,
+        sessionId: 'session-provider-rpc',
+        channel: {
+          ...buildChannel('qwen'),
+          baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        },
+        apiKey: 'sk-qwen-smoke',
+        model: 'qwen/qwen-plus',
+      })
+      const extensionPath = ensurePiProviderDiagnosticExtensionForTest({
+        configDir: config.configDir,
+        apiKeyEnv: 'OPENAI_API_KEY',
+        providerName: 'openai',
+      })
+
+      rpc = startPiRpcSession({
+        cwd: homeDir,
+        provider: config.provider,
+        model: 'qwen-plus',
+        sessionId: 'session-provider-rpc',
+        sessionDir: config.sessionDir,
+        extensionPaths: [extensionPath],
+        runtimeEnv: config.runtimeEnv,
+      })
+      rpc.send({ id: 'provider-status-1', type: 'get_commands' })
+
+      const commandsResponse = await waitForPiRpcResponse({
+        events: rpc.events,
+        id: 'provider-status-1',
+      })
+      expect(commandsResponse.success).toBe(true)
+      const commandsData = commandsResponse.data as { commands?: Array<{ name?: string; description?: string; source?: string }> }
+      const statusCommand = commandsData.commands?.find((command) => command.name === 'proma:provider_config_status')
+      expect(statusCommand?.source).toBe('extension')
+      expect(statusCommand?.description).toContain('provider: openai')
+      expect(statusCommand?.description).toContain('api key env: OPENAI_API_KEY present')
+      expect(statusCommand?.description).toContain('baseUrl: https://dashscope.aliyuncs.com/compatible-mode/v1')
+      expect(statusCommand?.description).toContain('models: qwen-plus')
+    } finally {
+      rpc?.kill()
+      if (rpc) {
+        await rpc.done
+      }
+      rmSync(homeDir, { recursive: true, force: true })
+    }
   })
 })
