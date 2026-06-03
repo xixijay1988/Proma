@@ -2844,6 +2844,32 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/adapters/pi-mcp-extension.test.ts -t "fallback call_tool"`：1 pass / 0 fail。
   - `bun test apps/electron/src/main/lib/adapters/pi-mcp-extension.test.ts -t "remote tool preserves structured MCP results"`：3 pass / 0 fail。
 
+## 2026-06-03 Phase J86 Pi MCP bridge result UI labels
+
+- 背景：
+  - J83-J85 已让 Pi MCP bridge 三类结果都带有稳定 `details.bridgeType`。
+  - 渲染层仍按普通工具结果展示，用户不容易从工具行判断这是 Pi MCP 原生工具、服务器级 `call_tool` 兜底，还是 `list_tools` 枚举。
+- 实现：
+  - `tool-result-content.ts`：
+    - 新增 `getPiMcpBridgeDisplay()`，把 `toolUseResult.details.bridgeType` 转换为用户可见的 label / description。
+    - 支持：
+      - `proma-pi-mcp-list-tools` → `MCP <server> / list_tools`
+      - `proma-pi-mcp-call-tool` → `MCP <server> / <toolName>`，说明为 `通过 call_tool 兜底调用`
+      - `proma-pi-mcp-remote-tool` → `MCP <server> / <toolName>`，说明为 `Pi MCP 原生工具`
+  - `ContentBlock.tsx`：
+    - 工具结果查找时读取 `toolUseResult.details`，完成态工具行使用 Pi MCP bridge label。
+    - 在桌面宽度显示一个轻量 chip，标明 bridge 来源说明。
+    - Claude SDK 工具、普通 Pi 工具、运行中 loading 文案不变。
+  - 测试：
+    - `tool-result-content.test.ts` 覆盖三类 bridgeType 的显示 metadata。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.122`。
+- 当前边界：
+  - 这是 UI provenance parity，不改变 MCP 调用、权限或 runtime 协议。
+  - 下一步可复用 `getPiMcpBridgeDisplay()` 继续增强权限说明和诊断 UI。
+- 已运行：
+  - `bun test apps/electron/src/renderer/components/agent/tool-result-content.test.ts`：红灯确认缺少 `getPiMcpBridgeDisplay`，实现后 3 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

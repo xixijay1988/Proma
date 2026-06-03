@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  getPiMcpBridgeDisplay,
   normalizeToolResultContent,
 } from './tool-result-content'
 
@@ -38,5 +39,48 @@ describe('tool result content normalization', () => {
       topic: 'alpha',
       ok: true,
     }, null, 2))
+  })
+
+  test('Given Pi MCP bridge details When display metadata is requested Then returns user visible provenance labels', () => {
+    expect(getPiMcpBridgeDisplay({
+      details: {
+        bridgeType: 'proma-pi-mcp-list-tools',
+        server: 'docs',
+        nativeToolName: 'mcp__docs__list_tools',
+        toolCount: 3,
+      },
+    })).toEqual({
+      bridgeType: 'proma-pi-mcp-list-tools',
+      label: 'MCP docs / list_tools',
+      description: '列出 3 个 MCP 工具',
+      server: 'docs',
+      nativeToolName: 'mcp__docs__list_tools',
+    })
+
+    expect(getPiMcpBridgeDisplay({
+      details: {
+        bridgeType: 'proma-pi-mcp-call-tool',
+        server: 'docs',
+        toolName: 'inspect-result',
+        nativeToolName: 'mcp__docs__call_tool',
+      },
+    })).toMatchObject({
+      bridgeType: 'proma-pi-mcp-call-tool',
+      label: 'MCP docs / inspect-result',
+      description: '通过 call_tool 兜底调用',
+    })
+
+    expect(getPiMcpBridgeDisplay({
+      details: {
+        bridgeType: 'proma-pi-mcp-remote-tool',
+        server: 'docs',
+        toolName: 'inspect-result',
+        nativeToolName: 'mcp__docs__inspect_result',
+      },
+    })).toMatchObject({
+      bridgeType: 'proma-pi-mcp-remote-tool',
+      label: 'MCP docs / inspect-result',
+      description: 'Pi MCP 原生工具',
+    })
   })
 })

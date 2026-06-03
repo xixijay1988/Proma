@@ -24,7 +24,7 @@ import { MessageResponse } from '@/components/ai-elements/message'
 import { getToolIcon, extractFilePath } from './tool-utils'
 import { getToolPhrase } from './tool-phrase'
 import { ToolResultRenderer } from './tool-result-renderers'
-import { normalizeToolResultContent, type NormalizedToolResultContent } from './tool-result-content'
+import { getPiMcpBridgeDisplay, normalizeToolResultContent, type NormalizedToolResultContent, type PiMcpBridgeDisplay } from './tool-result-content'
 import { PreviewOpenButton } from './tool-result-renderers/preview-open-button'
 import { getTaskGetStatusLabel, parseTaskGetResult, type ParsedTaskGetResult } from './tool-result-renderers/task-get-result'
 import { parseTaskListResult, type ParsedTaskListItem } from './tool-result-renderers/task-list-result'
@@ -46,6 +46,7 @@ interface ToolResultData {
   result?: string
   isError?: boolean
   normalized: NormalizedToolResultContent
+  piMcpBridge?: PiMcpBridgeDisplay
 }
 
 /** 在 allMessages 中查找匹配 toolUseId 的工具结果 */
@@ -62,8 +63,14 @@ function useToolResult(toolUseId: string, allMessages: SDKMessage[]): ToolResult
           const resultBlock = block as SDKToolResultBlock
           if (resultBlock.tool_use_id === toolUseId) {
             const rawToolUseResult = userMsg as unknown as Record<string, unknown>
-            const normalized = normalizeToolResultContent(resultBlock.content, rawToolUseResult.toolUseResult)
-            return { result: normalized.text, isError: resultBlock.is_error, normalized }
+            const rawResult = rawToolUseResult.toolUseResult
+            const normalized = normalizeToolResultContent(resultBlock.content, rawResult)
+            return {
+              result: normalized.text,
+              isError: resultBlock.is_error,
+              normalized,
+              piMcpBridge: getPiMcpBridgeDisplay(rawResult) ?? undefined,
+            }
           }
         }
       }
@@ -366,11 +373,13 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
 
   const phrase = getToolPhrase(block.name, block.input)
   const ToolIcon = getToolIcon(block.name)
+  const piMcpBridge = toolResult?.piMcpBridge
 
   const isCompleted = toolResult !== null
 
   // 运行中显示进行时短语，完成或非流式（已终止）显示完成态短语
-  const displayLabel = (isCompleted || !isStreaming) ? phrase.label : phrase.loadingLabel
+  const baseDisplayLabel = (isCompleted || !isStreaming) ? phrase.label : phrase.loadingLabel
+  const displayLabel = isCompleted && piMcpBridge ? piMcpBridge.label : baseDisplayLabel
   const filePath = extractFilePath(block.input)
   const isPreviewable = (
     (block.name === 'Read' || block.name === 'Edit' || block.name === 'Write') &&
@@ -517,6 +526,15 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
         {taskListSummary && (
           <span className="flex min-w-0 items-center gap-1.5">
             <TaskListCollapsedSummary tasks={taskListSummary} />
+          </span>
+        )}
+
+        {piMcpBridge && (
+          <span
+            className="hidden shrink-0 rounded-full bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium text-primary sm:inline"
+            title={piMcpBridge.nativeToolName}
+          >
+            {piMcpBridge.description}
           </span>
         )}
 
