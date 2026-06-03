@@ -869,6 +869,11 @@ describe('AgentOrchestrator pi routing', () => {
             nativeSessionId: 'pi-native-state',
             messageCount: 4,
             pendingMessageCount: 1,
+            stats: {
+              totalMessages: 9,
+              tokens: { input: 300, output: 120, total: 420 },
+              costUsd: 0.045,
+            },
           }
         }
 
@@ -904,7 +909,13 @@ describe('AgentOrchestrator pi routing', () => {
 
     const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('runtimeState'))
     const result = JSON.parse(jsonLine ?? '{}') as {
-      runtimeState?: { provider?: string; modelId?: string; nativeSessionId?: string; pendingMessageCount?: number }
+      runtimeState?: {
+        provider?: string
+        modelId?: string
+        nativeSessionId?: string
+        pendingMessageCount?: number
+        stats?: { totalMessages?: number; tokens?: { total?: number }; costUsd?: number }
+      }
       stateCalls?: string[]
     }
 
@@ -914,6 +925,11 @@ describe('AgentOrchestrator pi routing', () => {
       modelId: 'deepseek-v4-flash',
       nativeSessionId: 'pi-native-state',
       pendingMessageCount: 1,
+      stats: {
+        totalMessages: 9,
+        tokens: { input: 300, output: 120, total: 420 },
+        costUsd: 0.045,
+      },
     })
   })
 

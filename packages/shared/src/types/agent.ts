@@ -1075,6 +1075,27 @@ export interface AgentRuntimeStateResult {
   messageCount?: number
   /** Runtime 待处理消息数量 */
   pendingMessageCount?: number
+  /** Runtime 原生会话统计 */
+  stats?: {
+    userMessages?: number
+    assistantMessages?: number
+    toolCalls?: number
+    toolResults?: number
+    totalMessages?: number
+    tokens?: {
+      input?: number
+      output?: number
+      cacheRead?: number
+      cacheWrite?: number
+      total?: number
+    }
+    costUsd?: number
+    contextUsage?: {
+      tokens?: number | null
+      maxTokens?: number
+      percent?: number | null
+    }
+  }
 }
 
 // ===== Agent 流式事件载荷 =====

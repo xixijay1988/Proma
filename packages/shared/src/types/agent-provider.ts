@@ -90,6 +90,29 @@ export interface AgentRuntimeState {
   autoCompactionEnabled?: boolean
   messageCount?: number
   pendingMessageCount?: number
+  stats?: AgentRuntimeSessionStats
+}
+
+/** 活跃 runtime 的会话统计信息（Pi RPC get_session_stats） */
+export interface AgentRuntimeSessionStats {
+  userMessages?: number
+  assistantMessages?: number
+  toolCalls?: number
+  toolResults?: number
+  totalMessages?: number
+  tokens?: {
+    input?: number
+    output?: number
+    cacheRead?: number
+    cacheWrite?: number
+    total?: number
+  }
+  costUsd?: number
+  contextUsage?: {
+    tokens?: number | null
+    maxTokens?: number
+    percent?: number | null
+  }
 }
 
 /**

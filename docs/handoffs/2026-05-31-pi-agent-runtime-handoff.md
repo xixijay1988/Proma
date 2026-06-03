@@ -2142,6 +2142,40 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun run typecheck`：通过。
   - `bun run electron:build`：通过，仅既有 Vite chunk-size warning。
 
+## 2026-06-03 Phase J60 Pi session stats runtime diagnostics
+
+- 背景：
+  - J59 已将 Pi RPC `get_state` 暴露为 Proma 可查询的活跃 runtime 状态。
+  - Pi RPC 同时提供 `get_session_stats`，能返回当前原生会话的消息数量、工具调用数量、token、费用和上下文占用。
+  - 这些数据是后续运行态证明、调试面板、自动压缩提示和 Pi / Claude SDK 行为差异排查的基础。
+- 实现：
+  - `AgentRuntimeState` 新增可选 `stats` 字段。
+  - `AgentRuntimeSessionStats` 统一表达 Pi `SessionStats` 的可展示字段：
+    - `userMessages` / `assistantMessages`
+    - `toolCalls` / `toolResults`
+    - `totalMessages`
+    - `tokens.input` / `tokens.output` / `tokens.cacheRead` / `tokens.cacheWrite` / `tokens.total`
+    - `costUsd`
+    - `contextUsage.tokens` / `contextUsage.maxTokens` / `contextUsage.percent`
+  - `PiAgentAdapter.getRuntimeState()`：
+    - 先发送 `{ type: 'get_state' }`。
+    - 再发送 `{ type: 'get_session_stats' }`。
+    - 合并为单个 Proma runtime diagnostics 结果返回 renderer IPC 边界。
+  - 测试补齐 adapter 与 orchestrator 两层断言，确保 runtime state route 会透传 `stats`。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.96`。
+  - `@proma/shared` patch bump 到 `0.1.51`。
+- 当前边界：
+  - 该统计仍依赖活跃 Pi runtime；已结束会话不会通过该接口读取历史 JSONL。
+  - Claude SDK 路径没有等价原生命令，`stats` 仍是 provider optional diagnostics，不作为统一 Agent 能力强制要求。
+  - J60 只扩展 IPC 数据结构与主进程 adapter，暂未新增 UI 展示。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts --test-name-pattern "runtime state" --timeout 30000`：通过，runtime state 测试覆盖 `get_state` + `get_session_stats`。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --timeout 30000`：53 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-session-manager.test.ts apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/adapters/pi-process.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts apps/electron/src/main/lib/adapters/pi-git-checkpoint-extension.test.ts apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts apps/electron/src/main/lib/adapters/pi-mcp-extension.test.ts apps/electron/src/main/lib/adapters/pi-memory-extension.test.ts apps/electron/src/main/lib/adapters/pi-nano-banana-extension.test.ts apps/electron/src/main/lib/adapters/pi-task-extension.test.ts --timeout 30000`：141 pass / 0 fail。
+  - `bun run typecheck`：通过。
+  - `bun run electron:build`：通过，仅既有 Vite chunk-size warning。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

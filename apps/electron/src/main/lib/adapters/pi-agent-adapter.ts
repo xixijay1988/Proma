@@ -9,6 +9,7 @@ import type {
   AgentRuntimeForkMessage,
   AgentRuntimeForkResult,
   AgentRuntimeState,
+  AgentRuntimeSessionStats,
   AgentRuntimeSwitchSessionResult,
   SDKUserMessageInput,
 } from '@proma/shared'
@@ -46,6 +47,7 @@ const PI_RUNTIME_COMMANDS = new Set([
   'fork',
   'get_fork_messages',
   'get_messages',
+  'get_session_stats',
   'get_state',
   'set_thinking_level',
   'switch_session',
@@ -534,6 +536,42 @@ function parseRuntimeStateData(data: unknown): AgentRuntimeState {
   }
 }
 
+function getNumber(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function parseRuntimeSessionStatsData(data: unknown): AgentRuntimeSessionStats {
+  const dataRecord = asRecord(data) ?? {}
+  const tokensRecord = asRecord(dataRecord.tokens) ?? {}
+  const contextUsageRecord = asRecord(dataRecord.contextUsage)
+  const tokens = {
+    input: getNumber(tokensRecord, 'input'),
+    output: getNumber(tokensRecord, 'output'),
+    cacheRead: getNumber(tokensRecord, 'cacheRead'),
+    cacheWrite: getNumber(tokensRecord, 'cacheWrite'),
+    total: getNumber(tokensRecord, 'total'),
+  }
+  const contextUsage = contextUsageRecord
+    ? {
+        tokens: getNumber(contextUsageRecord, 'tokens') ?? null,
+        maxTokens: getNumber(contextUsageRecord, 'maxTokens'),
+        percent: getNumber(contextUsageRecord, 'percent') ?? null,
+      }
+    : undefined
+
+  return {
+    userMessages: getNumber(dataRecord, 'userMessages'),
+    assistantMessages: getNumber(dataRecord, 'assistantMessages'),
+    toolCalls: getNumber(dataRecord, 'toolCalls'),
+    toolResults: getNumber(dataRecord, 'toolResults'),
+    totalMessages: getNumber(dataRecord, 'totalMessages'),
+    tokens,
+    costUsd: getNumber(dataRecord, 'cost'),
+    ...(contextUsage ? { contextUsage } : {}),
+  }
+}
+
 function createPiCompactMessages(input: {
   sessionId: string
   data: unknown
@@ -994,12 +1032,20 @@ export class PiAgentAdapter implements AgentProviderAdapter {
   }
 
   async getRuntimeState(sessionId: string): Promise<AgentRuntimeState> {
-    const response = await this.sendRuntimeCommand(
+    const stateResponse = await this.sendRuntimeCommand(
       sessionId,
       { type: 'get_state' },
       'proma-get-state',
     )
-    return parseRuntimeStateData(response.data)
+    const statsResponse = await this.sendRuntimeCommand(
+      sessionId,
+      { type: 'get_session_stats' },
+      'proma-get-session-stats',
+    )
+    return {
+      ...parseRuntimeStateData(stateResponse.data),
+      stats: parseRuntimeSessionStatsData(statsResponse.data),
+    }
   }
 
   async stopShellTask(sessionId: string, taskId: string): Promise<void> {

@@ -346,16 +346,33 @@ describe('PiAgentAdapter', () => {
 
       const sentCommands = []
       let releaseAgentEnd
-      let releaseResponse
+      const responses = []
+      let notifyResponse
       const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
-      const waitForResponse = new Promise((resolve) => { releaseResponse = resolve })
+      const waitForResponse = () => new Promise((resolve) => {
+        const existing = responses.shift()
+        if (existing) {
+          resolve(existing)
+          return
+        }
+        notifyResponse = resolve
+      })
+      const pushResponse = (response) => {
+        if (notifyResponse) {
+          const resolve = notifyResponse
+          notifyResponse = null
+          resolve(response)
+          return
+        }
+        responses.push(response)
+      }
 
       mock.module('./pi-process', () => ({
         startPiRpcSession: () => ({
           send: (command) => {
             sentCommands.push(command)
             if (command.type === 'fork') {
-              queueMicrotask(() => releaseResponse({
+              queueMicrotask(() => pushResponse({
                 type: 'response',
                 id: command.id,
                 command: 'fork',
@@ -379,7 +396,7 @@ describe('PiAgentAdapter', () => {
             aborted: false,
           }),
           events: (async function* () {
-            const response = await waitForResponse
+            const response = await waitForResponse()
             yield response
             await waitForRelease
             yield { type: 'agent_end', messages: [] }
@@ -436,16 +453,33 @@ describe('PiAgentAdapter', () => {
 
       const sentCommands = []
       let releaseAgentEnd
-      let releaseResponse
+      let notifyResponse
+      const responses = []
       const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
-      const waitForResponse = new Promise((resolve) => { releaseResponse = resolve })
+      const waitForResponse = () => new Promise((resolve) => {
+        const existing = responses.shift()
+        if (existing) {
+          resolve(existing)
+          return
+        }
+        notifyResponse = resolve
+      })
+      const pushResponse = (response) => {
+        if (notifyResponse) {
+          const resolve = notifyResponse
+          notifyResponse = null
+          resolve(response)
+          return
+        }
+        responses.push(response)
+      }
 
       mock.module('./pi-process', () => ({
         startPiRpcSession: () => ({
           send: (command) => {
             sentCommands.push(command)
             if (command.type === 'clone') {
-              queueMicrotask(() => releaseResponse({
+              queueMicrotask(() => pushResponse({
                 type: 'response',
                 id: command.id,
                 command: 'clone',
@@ -468,7 +502,7 @@ describe('PiAgentAdapter', () => {
             aborted: false,
           }),
           events: (async function* () {
-            const response = await waitForResponse
+            const response = await waitForResponse()
             yield response
             await waitForRelease
             yield { type: 'agent_end', messages: [] }
@@ -524,16 +558,33 @@ describe('PiAgentAdapter', () => {
 
       const sentCommands = []
       let releaseAgentEnd
-      let releaseResponse
+      let notifyResponse
+      const responses = []
       const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
-      const waitForResponse = new Promise((resolve) => { releaseResponse = resolve })
+      const waitForResponse = () => new Promise((resolve) => {
+        const existing = responses.shift()
+        if (existing) {
+          resolve(existing)
+          return
+        }
+        notifyResponse = resolve
+      })
+      const pushResponse = (response) => {
+        if (notifyResponse) {
+          const resolve = notifyResponse
+          notifyResponse = null
+          resolve(response)
+          return
+        }
+        responses.push(response)
+      }
 
       mock.module('./pi-process', () => ({
         startPiRpcSession: () => ({
           send: (command) => {
             sentCommands.push(command)
             if (command.type === 'switch_session') {
-              queueMicrotask(() => releaseResponse({
+              queueMicrotask(() => pushResponse({
                 type: 'response',
                 id: command.id,
                 command: 'switch_session',
@@ -554,7 +605,7 @@ describe('PiAgentAdapter', () => {
             aborted: false,
           }),
           events: (async function* () {
-            const response = await waitForResponse
+            const response = await waitForResponse()
             yield response
             await waitForRelease
             yield { type: 'agent_end', messages: [] }
@@ -930,16 +981,33 @@ describe('PiAgentAdapter', () => {
 
       const sentCommands = []
       let releaseAgentEnd
-      let releaseResponse
+      let notifyResponse
+      const responses = []
       const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
-      const waitForResponse = new Promise((resolve) => { releaseResponse = resolve })
+      const waitForResponse = () => new Promise((resolve) => {
+        const existing = responses.shift()
+        if (existing) {
+          resolve(existing)
+          return
+        }
+        notifyResponse = resolve
+      })
+      const pushResponse = (response) => {
+        if (notifyResponse) {
+          const resolve = notifyResponse
+          notifyResponse = null
+          resolve(response)
+          return
+        }
+        responses.push(response)
+      }
 
       mock.module('./pi-process', () => ({
         startPiRpcSession: () => ({
           send: (command) => {
             sentCommands.push(command)
             if (command.type === 'get_state') {
-              queueMicrotask(() => releaseResponse({
+              queueMicrotask(() => pushResponse({
                 type: 'response',
                 id: command.id,
                 command: 'get_state',
@@ -960,6 +1028,36 @@ describe('PiAgentAdapter', () => {
                 },
               }))
             }
+            if (command.type === 'get_session_stats') {
+              queueMicrotask(() => pushResponse({
+                type: 'response',
+                id: command.id,
+                command: 'get_session_stats',
+                success: true,
+                data: {
+                  sessionFile: '/tmp/pi-session.jsonl',
+                  sessionId: 'pi-native-session-1',
+                  userMessages: 3,
+                  assistantMessages: 4,
+                  toolCalls: 5,
+                  toolResults: 5,
+                  totalMessages: 17,
+                  tokens: {
+                    input: 1000,
+                    output: 250,
+                    cacheRead: 80,
+                    cacheWrite: 40,
+                    total: 1370,
+                  },
+                  cost: 0.1234,
+                  contextUsage: {
+                    tokens: 1370,
+                    maxTokens: 200000,
+                    percent: 0.685,
+                  },
+                },
+              }))
+            }
           },
           abort: () => {},
           kill: () => {},
@@ -971,8 +1069,12 @@ describe('PiAgentAdapter', () => {
             aborted: false,
           }),
           events: (async function* () {
-            const response = await waitForResponse
-            yield response
+            yield await waitForResponse()
+            const maybeStats = await Promise.race([
+              waitForResponse(),
+              new Promise((resolve) => setTimeout(() => resolve(null), 20)),
+            ])
+            if (maybeStats) yield maybeStats
             await waitForRelease
             yield { type: 'agent_end', messages: [] }
           })(),
@@ -1020,13 +1122,34 @@ describe('PiAgentAdapter', () => {
         autoCompactionEnabled?: boolean
         messageCount?: number
         pendingMessageCount?: number
+        stats?: {
+          userMessages?: number
+          assistantMessages?: number
+          toolCalls?: number
+          toolResults?: number
+          totalMessages?: number
+          tokens?: {
+            input?: number
+            output?: number
+            cacheRead?: number
+            cacheWrite?: number
+            total?: number
+          }
+          costUsd?: number
+          contextUsage?: {
+            tokens?: number
+            maxTokens?: number
+            percent?: number
+          }
+        }
       }
       resultType?: string
       resultSubtype?: string
     }
 
-    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'get_state'])
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'get_state', 'get_session_stats'])
     expect(result.sentCommands?.[1]?.id).toStartWith('proma-get-state-session-pi-runtime-state-')
+    expect(result.sentCommands?.[2]?.id).toStartWith('proma-get-session-stats-session-pi-runtime-state-')
     expect(result.runtimeState).toEqual({
       provider: 'deepseek',
       modelId: 'deepseek-v4-flash',
@@ -1042,6 +1165,26 @@ describe('PiAgentAdapter', () => {
       autoCompactionEnabled: true,
       messageCount: 12,
       pendingMessageCount: 2,
+      stats: {
+        userMessages: 3,
+        assistantMessages: 4,
+        toolCalls: 5,
+        toolResults: 5,
+        totalMessages: 17,
+        tokens: {
+          input: 1000,
+          output: 250,
+          cacheRead: 80,
+          cacheWrite: 40,
+          total: 1370,
+        },
+        costUsd: 0.1234,
+        contextUsage: {
+          tokens: 1370,
+          maxTokens: 200000,
+          percent: 0.685,
+        },
+      },
     })
     expect(result.resultType).toBe('result')
     expect(result.resultSubtype).toBe('success')
