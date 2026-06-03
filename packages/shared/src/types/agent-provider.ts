@@ -157,6 +157,8 @@ export interface AgentQueryInput {
   runtimeEnv?: Record<string, string | undefined>
   /** Runtime 原生推理深度（如 Pi RPC 的 thinking level） */
   runtimeThinkingLevel?: string
+  /** Runtime 原生自动上下文压缩开关（如 Pi RPC auto compaction） */
+  runtimeAutoCompactionEnabled?: boolean
   /** 中止信号 */
   abortSignal?: AbortSignal
   /** Runtime 扩展 UI 请求处理器（如 Pi RPC extension UI） */
@@ -191,6 +193,8 @@ export interface AgentProviderAdapter {
   stopShellTask?(sessionId: string, taskId: string): Promise<void>
   /** 压缩活跃 runtime 的会话上下文（可选，仅支持具备原生 compact 的 Provider） */
   compact?(sessionId: string, customInstructions?: string): Promise<SDKMessage[]>
+  /** 动态切换活跃 runtime 的自动上下文压缩（可选，仅支持具备 auto compaction 的 Provider） */
+  setAutoCompaction?(sessionId: string, enabled: boolean): Promise<void>
   /** 动态切换活跃 runtime 的推理深度（可选，仅支持具备 thinking level 的 Provider） */
   setThinkingLevel?(sessionId: string, level: string): Promise<void>
   /** 动态切换活跃查询的权限模式（可选，仅支持 SDK 原生 setPermissionMode 的 Provider） */

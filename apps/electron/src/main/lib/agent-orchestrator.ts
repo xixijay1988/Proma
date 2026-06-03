@@ -1158,6 +1158,7 @@ export class AgentOrchestrator {
           ...(piNanoBananaExtension?.env ?? {}),
         },
         runtimeThinkingLevel: mapPromaThinkingToPiLevel(appSettings.agentThinking, appSettings.agentEffort),
+        runtimeAutoCompactionEnabled: true,
         abortSignal: piExtensionUiAbortController.signal,
         handleExtensionUiRequest: this.createPiExtensionUiHandler(sessionId, piExtensionUiAbortController.signal),
       })) {

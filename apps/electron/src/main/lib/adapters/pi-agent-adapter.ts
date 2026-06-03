@@ -51,6 +51,7 @@ const PI_RUNTIME_COMMANDS = new Set([
   'get_messages',
   'get_session_stats',
   'get_state',
+  'set_auto_compaction',
   'set_thinking_level',
   'switch_session',
 ])
@@ -888,6 +889,13 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         })
       }
 
+      if (typeof input.runtimeAutoCompactionEnabled === 'boolean') {
+        void this.setAutoCompaction(input.sessionId, input.runtimeAutoCompactionEnabled).catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error)
+          console.warn(`[Pi Agent] 初始自动压缩设置同步失败，继续发送 prompt: ${message}`)
+        })
+      }
+
       piProcess.send({
         id: `proma-prompt-${input.sessionId}-${Date.now()}`,
         type: 'prompt',
@@ -1111,6 +1119,14 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     )
 
     return createPiCompactMessages({ sessionId, data: response.data })
+  }
+
+  async setAutoCompaction(sessionId: string, enabled: boolean): Promise<void> {
+    await this.sendRuntimeCommand(
+      sessionId,
+      { type: 'set_auto_compaction', enabled },
+      'proma-set-auto-compaction',
+    )
   }
 
   async setThinkingLevel(sessionId: string, level: string): Promise<void> {

@@ -2203,6 +2203,33 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts --test-name-pattern "runtime state" --timeout 30000`：红灯确认未发送 `get_commands`，实现后 1 pass / 0 fail。
   - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --timeout 30000`：53 pass / 0 fail。
 
+## 2026-06-03 Phase J62 Pi auto compaction runtime sync
+
+- 背景：
+  - Pi RPC 原生支持 `set_auto_compaction`，可在上下文接近阈值时由 runtime 自动压缩。
+  - Proma J57 已支持手动 `/compact` 路由到 Pi 原生 `compact`，但新 turn 启动时没有同步自动压缩策略。
+  - 为了让 Pi 的上下文管理体验更接近 Claude SDK，先在 Pi runtime 查询启动阶段默认启用自动压缩。
+- 实现：
+  - `AgentQueryInput` 新增 `runtimeAutoCompactionEnabled?: boolean`。
+  - `AgentProviderAdapter` 新增可选能力 `setAutoCompaction(sessionId, enabled)`。
+  - `PiAgentAdapter`：
+    - 将 `set_auto_compaction` 加入 runtime command response 集合。
+    - 新增 `setAutoCompaction()`，发送 Pi RPC `{ type: 'set_auto_compaction', enabled }`。
+    - `query()` 启动后、prompt 发送前，如果输入带 `runtimeAutoCompactionEnabled`，非阻塞发送自动压缩设置，避免等待 response 导致事件流死锁。
+  - `AgentOrchestrator.runPiSession()`：
+    - 对 Pi runtime query 传入 `runtimeAutoCompactionEnabled: true`。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.98`。
+  - `@proma/shared` patch bump 到 `0.1.53`。
+- 当前边界：
+  - J62 先采用 Pi runtime 默认启用策略，暂未新增 UI 设置开关。
+  - 如果 Pi runtime 不支持或同步失败，会打印中文 warning 并继续发送 prompt，避免影响主对话。
+  - `getRuntimeState()` 已可通过 `autoCompactionEnabled` 反查当前 runtime 状态。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts --test-name-pattern "auto compaction" --timeout 30000`：红灯确认未发送 `set_auto_compaction`，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --test-name-pattern "auto compaction" --timeout 30000`：红灯确认未传 `runtimeAutoCompactionEnabled`，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --timeout 30000`：55 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。
