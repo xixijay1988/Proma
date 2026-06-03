@@ -2517,6 +2517,27 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "queued image input" --timeout 30000`：红灯确认 orchestrator 未透传 queued images，实现后 1 pass / 0 fail。
   - `bun test apps/electron/src/renderer/components/agent/agent-runtime-images.test.ts -t "queueable"`：红灯确认 helper 缺失，实现后 queueable 用例通过；随后全文件 4 pass / 0 fail。
 
+## 2026-06-03 Phase J73 Pi queued prompt acceptance parity
+
+- 背景：
+  - J70/J72 已让 Pi 运行中追加消息走 `prompt + streamingBehavior`，保留 `/skill`、prompt template 与 extension command 展开语义。
+  - 但 `PiAgentAdapter.sendQueuedMessage()` 此前只把 RPC command 写入进程就返回，不等待 Pi 的 `response`。
+  - 如果 Pi 在 preflight/acceptance 阶段拒绝 queued prompt，Proma renderer 会误以为追加成功，并可能清理输入附件或显示乐观消息。
+- 实现：
+  - `PiAgentAdapter.sendQueuedMessage()` 改为复用 `sendRuntimeCommand()` 发送 queued `prompt`。
+  - queued prompt 现在等待 Pi `response`：
+    - `success: true` 后才返回给 orchestrator / IPC。
+    - `success: false` 会抛出 Pi response error，前端可按既有 queue 失败逻辑回滚乐观消息。
+  - 继续保留 `streamingBehavior: "steer" | "followUp"` 与 queued images 透传。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.109`。
+- 当前边界：
+  - 这是 queued prompt acceptance parity，不是完整队列管理 UI；Proma 仍未接入 `CANCEL_QUEUED_MESSAGE` / `PROMOTE_QUEUED_MESSAGE` 的用户界面。
+  - Pi queue_update 当前仍作为 transient summary 展示，不持久化每条 queued item 的 Proma 状态机。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "queued prompt is rejected" --timeout 30000`：红灯确认旧实现静默成功，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "queued message|queued image|follow-up|queued prompt is rejected|queued adapter rejects" --timeout 30000`：6 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

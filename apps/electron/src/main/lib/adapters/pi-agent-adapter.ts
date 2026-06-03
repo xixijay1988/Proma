@@ -1151,8 +1151,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
   }
 
   async sendQueuedMessage(sessionId: string, message: SDKUserMessageInput): Promise<void> {
-    const piProcess = this.processes.get(sessionId)
-    if (!piProcess) {
+    if (!this.processes.has(sessionId)) {
       throw new Error(`[Pi Agent] 会话未运行，无法追加消息: ${sessionId}`)
     }
 
@@ -1162,14 +1161,13 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     }
 
     // 运行中追加仍走 prompt，让 Pi 保留 /skill、prompt template 与 extension command 展开语义。
-    // streamingBehavior 只负责告诉 Pi 如何排队当前消息。
-    piProcess.send({
-      id: `proma-queued-prompt-${message.uuid ?? Date.now()}`,
+    // streamingBehavior 只负责告诉 Pi 如何排队当前消息；这里等待 response，避免 UI 误判被拒绝的队列消息为成功。
+    await this.sendRuntimeCommand(sessionId, {
       type: 'prompt',
       message: text,
       streamingBehavior: message.priority === 'now' ? 'steer' : 'followUp',
       ...(message.images && message.images.length > 0 ? { images: message.images } : {}),
-    })
+    }, `proma-queued-prompt-${message.uuid ?? Date.now()}`)
   }
 
   async getForkMessages(sessionId: string): Promise<AgentRuntimeForkMessage[]> {

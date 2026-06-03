@@ -2061,6 +2061,107 @@ describe('AgentOrchestrator pi routing', () => {
     ])
   })
 
+  test('Given pi engine active session When queued adapter rejects Then queueing message does not persist user message', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      const persisted = []
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      mock.module('./agent-session-manager.ts', () => ({
+        appendSDKMessages: (_sessionId, messages) => { persisted.push(...messages) },
+        getAgentSessionMessages: () => [],
+        getAgentSessionSDKMessages: () => [],
+        truncateSDKMessages: () => {},
+        resolveUserUuidFromSDK: () => undefined,
+        rewindFilesFromSnapshot: () => ({ restoredFiles: [], failedFiles: [] }),
+        createPiNativeRewindSession: () => null,
+        updateAgentSessionMeta: () => {},
+        getAgentSessionMeta: () => undefined,
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+
+      class RejectingPiAdapter {
+        release = null
+
+        async *query() {
+          await new Promise((resolve) => { this.release = resolve })
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: 'session-pi-queue-reject-orchestrator',
+          }
+        }
+
+        abort() {}
+        dispose() {}
+        async sendQueuedMessage() {
+          throw new Error('Pi prompt rejected before acceptance')
+        }
+      }
+
+      const adapter = new RejectingPiAdapter()
+      const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
+
+      const runPromise = orchestrator.sendMessage({
+        sessionId: 'session-pi-queue-reject-orchestrator',
+        userMessage: 'hello',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        startedAt: 903,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      let errorMessage = null
+      try {
+        await orchestrator.queueMessage(
+          'session-pi-queue-reject-orchestrator',
+          'continue rejected',
+          undefined,
+          'queued-pi-reject-1',
+          { interrupt: true },
+        )
+      } catch (error) {
+        errorMessage = error instanceof Error ? error.message : String(error)
+      }
+
+      adapter.release()
+      await runPromise
+
+      console.log(JSON.stringify({
+        errorMessage,
+        persistedTexts: persisted.map((message) => message.message?.content?.[0]?.text ?? null),
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('errorMessage'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      errorMessage?: string | null
+      persistedTexts?: Array<string | null>
+    }
+
+    expect(result.errorMessage).toBe('Pi prompt rejected before acceptance')
+    expect(result.persistedTexts).not.toContain('continue rejected')
+  })
+
   test('Given pi engine active session When stopping Then aborts Pi adapter and completes as stopped by user', () => {
     const output = runOrchestratorScript(`
       import { mock } from 'bun:test'

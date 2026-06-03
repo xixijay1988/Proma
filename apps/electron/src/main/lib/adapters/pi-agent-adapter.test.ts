@@ -92,7 +92,17 @@ describe('PiAgentAdapter', () => {
 
       mock.module('./pi-process', () => ({
         startPiRpcSession: () => ({
-          send: (command) => { sentCommands.push(command) },
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'prompt' && command.id?.startsWith('proma-queued-prompt-')) {
+              queueMicrotask(() => releaseAgentEnd({
+                type: 'response',
+                id: command.id,
+                command: 'prompt',
+                success: true,
+              }))
+            }
+          },
           abort: () => {},
           kill: () => { killCount += 1 },
           done: Promise.resolve({
@@ -189,7 +199,17 @@ describe('PiAgentAdapter', () => {
 
       mock.module('./pi-process', () => ({
         startPiRpcSession: () => ({
-          send: (command) => { sentCommands.push(command) },
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'prompt' && command.id?.startsWith('proma-queued-prompt-')) {
+              queueMicrotask(() => releaseAgentEnd({
+                type: 'response',
+                id: command.id,
+                command: 'prompt',
+                success: true,
+              }))
+            }
+          },
           abort: () => {},
           kill: () => {},
           done: Promise.resolve({
@@ -266,7 +286,17 @@ describe('PiAgentAdapter', () => {
 
       mock.module('./pi-process', () => ({
         startPiRpcSession: () => ({
-          send: (command) => { sentCommands.push(command) },
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'prompt' && command.id?.startsWith('proma-queued-prompt-')) {
+              queueMicrotask(() => releaseAgentEnd({
+                type: 'response',
+                id: command.id,
+                command: 'prompt',
+                success: true,
+              }))
+            }
+          },
           abort: () => {},
           kill: () => {},
           done: Promise.resolve({
@@ -277,7 +307,7 @@ describe('PiAgentAdapter', () => {
             aborted: false,
           }),
           events: (async function* () {
-            await waitForRelease
+            yield await waitForRelease
             yield { type: 'agent_end', messages: [] }
           })(),
         }),
@@ -303,7 +333,6 @@ describe('PiAgentAdapter', () => {
         session_id: 'session-pi-queue',
       })
 
-      releaseAgentEnd()
       const resultMessage = await firstYield
 
       console.log(JSON.stringify({
@@ -340,7 +369,17 @@ describe('PiAgentAdapter', () => {
 
       mock.module('./pi-process', () => ({
         startPiRpcSession: () => ({
-          send: (command) => { sentCommands.push(command) },
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'prompt' && command.id?.startsWith('proma-queued-prompt-')) {
+              queueMicrotask(() => releaseAgentEnd({
+                type: 'response',
+                id: command.id,
+                command: 'prompt',
+                success: true,
+              }))
+            }
+          },
           abort: () => {},
           kill: () => {},
           done: Promise.resolve({
@@ -351,7 +390,7 @@ describe('PiAgentAdapter', () => {
             aborted: false,
           }),
           events: (async function* () {
-            await waitForRelease
+            yield await waitForRelease
             yield { type: 'agent_end', messages: [] }
           })(),
         }),
@@ -415,17 +454,45 @@ describe('PiAgentAdapter', () => {
     })
   })
 
-  test('Given active Pi query When later queued message is sent Then queues follow-up through prompt streaming behavior', () => {
+  test('Given active Pi query When queued prompt is rejected Then sendQueuedMessage rejects with Pi response error', () => {
     const output = runPiAdapterScript(`
       import { mock } from 'bun:test'
 
       const sentCommands = []
+      const responses = []
+      let resolveResponseWaiter
+      const waitForResponse = () => {
+        const existing = responses.shift()
+        if (existing) return Promise.resolve(existing)
+        return new Promise((resolve) => { resolveResponseWaiter = resolve })
+      }
+      const pushResponse = (response) => {
+        if (resolveResponseWaiter) {
+          const resolve = resolveResponseWaiter
+          resolveResponseWaiter = null
+          resolve(response)
+          return
+        }
+        responses.push(response)
+      }
+
       let releaseAgentEnd
       const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
 
       mock.module('./pi-process', () => ({
         startPiRpcSession: () => ({
-          send: (command) => { sentCommands.push(command) },
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'prompt' && command.id?.startsWith('proma-queued-prompt-')) {
+              queueMicrotask(() => pushResponse({
+                type: 'response',
+                id: command.id,
+                command: 'prompt',
+                success: false,
+                error: 'streamingBehavior is required while streaming',
+              }))
+            }
+          },
           abort: () => {},
           kill: () => {},
           done: Promise.resolve({
@@ -436,7 +503,86 @@ describe('PiAgentAdapter', () => {
             aborted: false,
           }),
           events: (async function* () {
+            yield await waitForResponse()
             await waitForRelease
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const iterator = adapter.query({
+        sessionId: 'session-pi-queue-reject',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })[Symbol.asyncIterator]()
+
+      const firstYield = iterator.next()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      let errorMessage = null
+      try {
+        await adapter.sendQueuedMessage('session-pi-queue-reject', {
+          type: 'user',
+          message: { role: 'user', content: 'queued reject' },
+          parent_tool_use_id: null,
+          priority: 'now',
+          uuid: 'queued-reject-1',
+          session_id: 'session-pi-queue-reject',
+        })
+      } catch (error) {
+        errorMessage = error instanceof Error ? error.message : String(error)
+      }
+
+      releaseAgentEnd()
+      await firstYield
+
+      console.log(JSON.stringify({ errorMessage, sentCommands }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('errorMessage'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      errorMessage?: string | null
+      sentCommands?: Array<{ type?: string; id?: string }>
+    }
+
+    expect(result.sentCommands?.[1]?.id).toStartWith('proma-queued-prompt-')
+    expect(result.errorMessage).toBe('streamingBehavior is required while streaming')
+  })
+
+  test('Given active Pi query When later queued message is sent Then queues follow-up through prompt streaming behavior', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+      let releaseAgentEnd
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'prompt' && command.id?.startsWith('proma-queued-prompt-')) {
+              queueMicrotask(() => releaseAgentEnd({
+                type: 'response',
+                id: command.id,
+                command: 'prompt',
+                success: true,
+              }))
+            }
+          },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield await waitForRelease
             yield { type: 'agent_end', messages: [] }
           })(),
         }),
