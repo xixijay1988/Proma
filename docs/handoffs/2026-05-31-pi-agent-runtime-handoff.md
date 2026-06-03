@@ -2105,6 +2105,43 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun run typecheck`：通过。
   - `bun run electron:build`：通过，仅既有 Vite chunk-size warning。
 
+## 2026-06-03 Phase J59 Pi runtime get_state diagnostics
+
+- 背景：
+  - Pi RPC 原生暴露 `get_state`，可返回当前模型、thinking level、streaming/compacting 状态、队列模式、原生 session 文件、消息数量等。
+  - Proma J58 已能把 Proma thinking 设置同步到 Pi，但缺少反向查询 runtime 当前状态的统一接口。
+  - 这会限制后续 UI runtime proof、调试面板、队列/压缩状态判断和 Pi 能力边界展示。
+- 实现：
+  - `AgentProviderAdapter` 新增可选能力 `getRuntimeState(sessionId)`。
+  - `AgentQueryInput` 保持 J58 的 `runtimeThinkingLevel`；J59 新增共享状态结构：
+    - `AgentRuntimeState`
+    - `GetRuntimeStateInput`
+    - `AgentRuntimeStateResult`
+  - `PiAgentAdapter`：
+    - 将 `get_state` 加入 runtime command response 集合。
+    - 新增 `getRuntimeState()`，发送 Pi RPC `{ type: 'get_state' }`。
+    - 将 Pi `RpcSessionState` 规范化为 Proma 字段：`provider`、`modelId`、`modelName`、`thinkingLevel`、`isStreaming`、`isCompacting`、`steeringMode`、`followUpMode`、`nativeSessionId`、`nativeSessionName`、`nativeSessionFile`、`autoCompactionEnabled`、`messageCount`、`pendingMessageCount`。
+  - `AgentOrchestrator`：
+    - 新增 `getActiveRuntimeState(sessionId)`，委托 adapter 获取活跃 runtime 状态。
+  - `agent-service.ts` / `ipc.ts` / `preload/index.ts`：
+    - 新增 `getAgentRuntimeState(input)`。
+    - 新增 IPC 通道 `agent:get-runtime-state`。
+    - Renderer 侧 `window.electronAPI.getRuntimeState(input)` 可直接读取活跃 runtime 状态。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.95`。
+  - `@proma/shared` patch bump 到 `0.1.50`。
+- 当前边界：
+  - 该接口要求会话有活跃 runtime；非运行中会话会沿用现有 orchestrator/adapter 错误路径。
+  - Claude SDK 当前没有等价 `get_state`，因此该能力是可选 Provider 能力，主要服务 Pi diagnostics。
+  - J59 只提供主进程到 renderer 的数据接口，暂未新增可视化 UI。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts --test-name-pattern "runtime state" --timeout 30000`：红灯确认 `adapter.getRuntimeState is not a function`，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --test-name-pattern "runtime state" --timeout 30000`：红灯确认 `orchestrator.getActiveRuntimeState is not a function`，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --timeout 30000`：53 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-session-manager.test.ts apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/adapters/pi-process.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts apps/electron/src/main/lib/adapters/pi-git-checkpoint-extension.test.ts apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts apps/electron/src/main/lib/adapters/pi-mcp-extension.test.ts apps/electron/src/main/lib/adapters/pi-memory-extension.test.ts apps/electron/src/main/lib/adapters/pi-nano-banana-extension.test.ts apps/electron/src/main/lib/adapters/pi-task-extension.test.ts --timeout 30000`：141 pass / 0 fail。
+  - `bun run typecheck`：通过。
+  - `bun run electron:build`：通过，仅既有 Vite chunk-size warning。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

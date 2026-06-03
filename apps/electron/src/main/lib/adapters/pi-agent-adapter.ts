@@ -8,6 +8,7 @@ import type {
   AgentRuntimeCloneResult,
   AgentRuntimeForkMessage,
   AgentRuntimeForkResult,
+  AgentRuntimeState,
   AgentRuntimeSwitchSessionResult,
   SDKUserMessageInput,
 } from '@proma/shared'
@@ -45,6 +46,7 @@ const PI_RUNTIME_COMMANDS = new Set([
   'fork',
   'get_fork_messages',
   'get_messages',
+  'get_state',
   'set_thinking_level',
   'switch_session',
 ])
@@ -491,6 +493,44 @@ function parseSwitchSessionResultData(data: unknown): AgentRuntimeSwitchSessionR
   return {
     ...dataRecord,
     cancelled,
+  }
+}
+
+function parseRuntimeStateData(data: unknown): AgentRuntimeState {
+  const dataRecord = asRecord(data) ?? {}
+  const modelRecord = asRecord(dataRecord.model)
+  const provider = modelRecord ? getString(modelRecord, 'provider') : undefined
+  const modelId = modelRecord
+    ? getString(modelRecord, 'id') ?? getString(modelRecord, 'modelId')
+    : undefined
+  const modelName = modelRecord ? getString(modelRecord, 'name') : undefined
+  const thinkingLevel = getString(dataRecord, 'thinkingLevel')
+  const isStreaming = getBoolean(dataRecord, 'isStreaming') ?? false
+  const isCompacting = getBoolean(dataRecord, 'isCompacting') ?? false
+  const steeringMode = getString(dataRecord, 'steeringMode')
+  const followUpMode = getString(dataRecord, 'followUpMode')
+  const nativeSessionId = getString(dataRecord, 'sessionId')
+  const nativeSessionName = getString(dataRecord, 'sessionName')
+  const nativeSessionFile = getString(dataRecord, 'sessionFile')
+  const autoCompactionEnabled = getBoolean(dataRecord, 'autoCompactionEnabled')
+  const messageCount = typeof dataRecord.messageCount === 'number' ? dataRecord.messageCount : undefined
+  const pendingMessageCount = typeof dataRecord.pendingMessageCount === 'number' ? dataRecord.pendingMessageCount : undefined
+
+  return {
+    ...(provider ? { provider } : {}),
+    ...(modelId ? { modelId } : {}),
+    ...(modelName ? { modelName } : {}),
+    ...(thinkingLevel ? { thinkingLevel } : {}),
+    isStreaming,
+    isCompacting,
+    ...(steeringMode ? { steeringMode } : {}),
+    ...(followUpMode ? { followUpMode } : {}),
+    ...(nativeSessionId ? { nativeSessionId } : {}),
+    ...(nativeSessionName ? { nativeSessionName } : {}),
+    ...(nativeSessionFile ? { nativeSessionFile } : {}),
+    ...(autoCompactionEnabled != null ? { autoCompactionEnabled } : {}),
+    ...(messageCount != null ? { messageCount } : {}),
+    ...(pendingMessageCount != null ? { pendingMessageCount } : {}),
   }
 }
 
@@ -951,6 +991,15 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     const data = asRecord(response.data)
     const messages = Array.isArray(data?.messages) ? data.messages : []
     return messages.filter((message): message is SDKMessage => Boolean(asRecord(message)))
+  }
+
+  async getRuntimeState(sessionId: string): Promise<AgentRuntimeState> {
+    const response = await this.sendRuntimeCommand(
+      sessionId,
+      { type: 'get_state' },
+      'proma-get-state',
+    )
+    return parseRuntimeStateData(response.data)
   }
 
   async stopShellTask(sessionId: string, taskId: string): Promise<void> {

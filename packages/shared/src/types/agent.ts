@@ -1037,6 +1037,46 @@ export interface StopTaskInput {
   type: 'agent' | 'shell'
 }
 
+// ===== Agent Runtime 状态 =====
+
+/** 获取活跃 Agent runtime 状态请求 */
+export interface GetRuntimeStateInput {
+  /** Proma 会话 ID */
+  sessionId: string
+}
+
+/** 活跃 Agent runtime 状态响应（当前主要由 Pi RPC get_state 提供） */
+export interface AgentRuntimeStateResult {
+  /** Runtime provider 名称 */
+  provider?: string
+  /** Runtime 当前模型 ID */
+  modelId?: string
+  /** Runtime 当前模型显示名 */
+  modelName?: string
+  /** Runtime 当前 thinking level */
+  thinkingLevel?: string
+  /** Runtime 是否正在流式运行 */
+  isStreaming: boolean
+  /** Runtime 是否正在压缩上下文 */
+  isCompacting: boolean
+  /** Pi steering 队列模式 */
+  steeringMode?: string
+  /** Pi follow-up 队列模式 */
+  followUpMode?: string
+  /** Runtime 原生 session id */
+  nativeSessionId?: string
+  /** Runtime 原生 session 显示名 */
+  nativeSessionName?: string
+  /** Runtime 原生 session 文件路径 */
+  nativeSessionFile?: string
+  /** Runtime 是否启用自动压缩 */
+  autoCompactionEnabled?: boolean
+  /** Runtime 原生消息数量 */
+  messageCount?: number
+  /** Runtime 待处理消息数量 */
+  pendingMessageCount?: number
+}
+
 // ===== Agent 流式事件载荷 =====
 
 /**
@@ -1417,6 +1457,8 @@ export const AGENT_IPC_CHANNELS = {
   GET_TASK_OUTPUT: 'agent:get-task-output',
   /** 停止任务 */
   STOP_TASK: 'agent:stop-task',
+  /** 获取活跃 runtime 状态 */
+  GET_RUNTIME_STATE: 'agent:get-runtime-state',
 
   // 工作区能力（MCP + Skill）
   /** 获取工作区能力摘要 */

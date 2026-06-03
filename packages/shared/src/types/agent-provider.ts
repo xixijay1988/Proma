@@ -74,6 +74,24 @@ export interface AgentRuntimeSwitchSessionResult {
   [key: string]: unknown
 }
 
+/** 活跃 runtime 的原生状态快照（当前主要由 Pi RPC get_state 提供） */
+export interface AgentRuntimeState {
+  provider?: string
+  modelId?: string
+  modelName?: string
+  thinkingLevel?: string
+  isStreaming: boolean
+  isCompacting: boolean
+  steeringMode?: string
+  followUpMode?: string
+  nativeSessionId?: string
+  nativeSessionName?: string
+  nativeSessionFile?: string
+  autoCompactionEnabled?: boolean
+  messageCount?: number
+  pendingMessageCount?: number
+}
+
 /**
  * Agent 查询输入（Provider 无关）
  *
@@ -151,4 +169,6 @@ export interface AgentProviderAdapter {
   switchSession?(sessionId: string, sessionPath: string): Promise<AgentRuntimeSwitchSessionResult>
   /** 获取活跃 runtime 当前消息快照（可选，用于 Pi 原生历史同步等运行中场景） */
   getMessages?(sessionId: string): Promise<SDKMessage[]>
+  /** 获取活跃 runtime 当前状态快照（可选，用于 Pi runtime diagnostics） */
+  getRuntimeState?(sessionId: string): Promise<AgentRuntimeState>
 }

@@ -63,6 +63,8 @@ import type {
   GetTaskOutputInput,
   GetTaskOutputResult,
   StopTaskInput,
+  GetRuntimeStateInput,
+  AgentRuntimeStateResult,
   WorkspaceMcpConfig,
   SkillMeta,
   WorkspaceCapabilities,
@@ -185,7 +187,7 @@ import {
   searchAgentSessionReferences,
   getAgentTaskOutput,
 } from './lib/agent-session-manager'
-import { runAgent, stopAgent, stopAgentTask, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, forkAgentSession, cloneActiveAgentSession, switchActiveAgentSession, setPiSessionFileForNextRun, syncPiNativeSessionMessages, applyPiGitCheckpointForSession } from './lib/agent-service'
+import { runAgent, stopAgent, stopAgentTask, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, forkAgentSession, cloneActiveAgentSession, switchActiveAgentSession, setPiSessionFileForNextRun, syncPiNativeSessionMessages, applyPiGitCheckpointForSession, getAgentRuntimeState } from './lib/agent-service'
 import { assertAgentSessionForkSupported } from './lib/agent-session-capabilities'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
@@ -2114,6 +2116,19 @@ export function registerIpcHandlers(): void {
         await stopAgentTask(input)
       } catch (error) {
         console.error('[IPC] 停止任务失败:', error)
+        throw error
+      }
+    }
+  )
+
+  // 获取活跃 runtime 状态
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.GET_RUNTIME_STATE,
+    async (_, input: GetRuntimeStateInput): Promise<AgentRuntimeStateResult> => {
+      try {
+        return await getAgentRuntimeState(input)
+      } catch (error) {
+        console.error('[IPC] 获取 runtime 状态失败:', error)
         throw error
       }
     }

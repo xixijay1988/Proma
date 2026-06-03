@@ -924,6 +924,129 @@ describe('PiAgentAdapter', () => {
     expect(result.resultSubtype).toBe('success')
   })
 
+  test('Given active Pi query When runtime state is requested Then sends get_state command and normalizes diagnostics', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+      let releaseAgentEnd
+      let releaseResponse
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+      const waitForResponse = new Promise((resolve) => { releaseResponse = resolve })
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'get_state') {
+              queueMicrotask(() => releaseResponse({
+                type: 'response',
+                id: command.id,
+                command: 'get_state',
+                success: true,
+                data: {
+                  model: { provider: 'deepseek', id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+                  thinkingLevel: 'high',
+                  isStreaming: true,
+                  isCompacting: false,
+                  steeringMode: 'all',
+                  followUpMode: 'one-at-a-time',
+                  sessionFile: '/tmp/pi-session.jsonl',
+                  sessionId: 'pi-native-session-1',
+                  sessionName: 'Pi Native',
+                  autoCompactionEnabled: true,
+                  messageCount: 12,
+                  pendingMessageCount: 2,
+                },
+              }))
+            }
+          },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            const response = await waitForResponse
+            yield response
+            await waitForRelease
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const iterator = adapter.query({
+        sessionId: 'session-pi-runtime-state',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })[Symbol.asyncIterator]()
+
+      const firstYield = iterator.next()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      const runtimeState = await adapter.getRuntimeState('session-pi-runtime-state')
+      releaseAgentEnd()
+      const resultMessage = await firstYield
+
+      console.log(JSON.stringify({
+        sentCommands,
+        runtimeState,
+        resultType: resultMessage.value?.type,
+        resultSubtype: resultMessage.value?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('runtimeState'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{ type?: string; id?: string }>
+      runtimeState?: {
+        provider?: string
+        modelId?: string
+        modelName?: string
+        thinkingLevel?: string
+        isStreaming?: boolean
+        isCompacting?: boolean
+        steeringMode?: string
+        followUpMode?: string
+        nativeSessionId?: string
+        nativeSessionName?: string
+        nativeSessionFile?: string
+        autoCompactionEnabled?: boolean
+        messageCount?: number
+        pendingMessageCount?: number
+      }
+      resultType?: string
+      resultSubtype?: string
+    }
+
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'get_state'])
+    expect(result.sentCommands?.[1]?.id).toStartWith('proma-get-state-session-pi-runtime-state-')
+    expect(result.runtimeState).toEqual({
+      provider: 'deepseek',
+      modelId: 'deepseek-v4-flash',
+      modelName: 'DeepSeek V4 Flash',
+      thinkingLevel: 'high',
+      isStreaming: true,
+      isCompacting: false,
+      steeringMode: 'all',
+      followUpMode: 'one-at-a-time',
+      nativeSessionId: 'pi-native-session-1',
+      nativeSessionName: 'Pi Native',
+      nativeSessionFile: '/tmp/pi-session.jsonl',
+      autoCompactionEnabled: true,
+      messageCount: 12,
+      pendingMessageCount: 2,
+    })
+    expect(result.resultType).toBe('result')
+    expect(result.resultSubtype).toBe('success')
+  })
+
   test('Given Pi native command failure When fork messages are requested Then rejects with response error', () => {
     const output = runPiAdapterScript(`
       import { mock } from 'bun:test'

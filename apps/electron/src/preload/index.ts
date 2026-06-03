@@ -52,6 +52,8 @@ import type {
   GetTaskOutputInput,
   GetTaskOutputResult,
   StopTaskInput,
+  GetRuntimeStateInput,
+  AgentRuntimeStateResult,
   WorkspaceMcpConfig,
   SkillMeta,
   OtherWorkspaceSkillsGroup,
@@ -497,6 +499,9 @@ export interface ElectronAPI {
 
   /** 停止任务 */
   stopTask: (input: StopTaskInput) => Promise<void>
+
+  /** 获取活跃 runtime 状态 */
+  getRuntimeState: (input: GetRuntimeStateInput) => Promise<AgentRuntimeStateResult>
 
   // ===== Agent 工作区管理相关 =====
 
@@ -1498,6 +1503,10 @@ const electronAPI: ElectronAPI = {
 
   stopTask: (input: StopTaskInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.STOP_TASK, input)
+  },
+
+  getRuntimeState: (input: GetRuntimeStateInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_RUNTIME_STATE, input)
   },
 
   // Agent 工作区管理

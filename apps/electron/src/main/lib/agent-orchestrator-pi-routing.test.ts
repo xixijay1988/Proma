@@ -818,6 +818,105 @@ describe('AgentOrchestrator pi routing', () => {
     expect(result.queryCount).toBe(1)
   })
 
+  test('Given active pi session When runtime state is requested Then delegates to adapter getRuntimeState', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+
+      let releaseQuery
+      const waitForRelease = new Promise((resolve) => { releaseQuery = resolve })
+
+      class FakePiAdapter {
+        stateCalls = []
+
+        async *query(input) {
+          yield {
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: 'running' }] },
+            parent_tool_use_id: null,
+            session_id: input.sessionId,
+          }
+          await waitForRelease
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        async getRuntimeState(sessionId) {
+          this.stateCalls.push(sessionId)
+          return {
+            provider: 'deepseek',
+            modelId: 'deepseek-v4-flash',
+            thinkingLevel: 'high',
+            isStreaming: true,
+            isCompacting: false,
+            nativeSessionId: 'pi-native-state',
+            messageCount: 4,
+            pendingMessageCount: 1,
+          }
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const adapter = new FakePiAdapter()
+      const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
+      const runPromise = orchestrator.sendMessage({
+        sessionId: 'session-pi-state-route',
+        userMessage: 'hello',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        startedAt: 803,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      const runtimeState = await orchestrator.getActiveRuntimeState('session-pi-state-route')
+      releaseQuery()
+      await runPromise
+
+      console.log(JSON.stringify({
+        runtimeState,
+        stateCalls: adapter.stateCalls,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('runtimeState'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      runtimeState?: { provider?: string; modelId?: string; nativeSessionId?: string; pendingMessageCount?: number }
+      stateCalls?: string[]
+    }
+
+    expect(result.stateCalls).toEqual(['session-pi-state-route'])
+    expect(result.runtimeState).toMatchObject({
+      provider: 'deepseek',
+      modelId: 'deepseek-v4-flash',
+      nativeSessionId: 'pi-native-state',
+      pendingMessageCount: 1,
+    })
+  })
+
   test('Given pi transient deltas When run completes Then persists only final assistant content', () => {
     const output = runOrchestratorScript(`
       import { mock } from 'bun:test'

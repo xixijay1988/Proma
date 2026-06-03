@@ -39,6 +39,7 @@ import type {
   AgentRuntimeExtensionUiRequest,
   AgentRuntimeExtensionUiHandler,
   AgentRuntimeExtensionUiResponse,
+  AgentRuntimeState,
   DangerLevel,
   ThinkingConfig,
 } from '@proma/shared'
@@ -2900,6 +2901,19 @@ export class AgentOrchestrator {
     }
 
     return this.adapter.getMessages(sessionId)
+  }
+
+  /**
+   * 获取活跃 runtime 当前状态快照。
+   *
+   * Pi RPC 用于运行中诊断原生会话状态；Claude SDK 当前没有等价接口。
+   */
+  async getActiveRuntimeState(sessionId: string): Promise<AgentRuntimeState> {
+    if (!this.adapter.getRuntimeState) {
+      throw new Error('当前 Agent 引擎不支持 runtime get_state')
+    }
+
+    return this.adapter.getRuntimeState(sessionId)
   }
 
   /**

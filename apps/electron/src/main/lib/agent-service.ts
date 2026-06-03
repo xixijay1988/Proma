@@ -37,6 +37,8 @@ import type {
   SyncPiNativeSessionMessagesResult,
   ApplyPiGitCheckpointInput,
   ApplyPiGitCheckpointResult,
+  GetRuntimeStateInput,
+  AgentRuntimeStateResult,
 } from '@proma/shared'
 import { scanAndKillOrphanedClaudeSubprocesses } from './adapters/claude-agent-adapter'
 import { createAgentAdapterRegistry } from './agent-adapter-registry'
@@ -514,6 +516,13 @@ export async function stopAgentTask(input: StopTaskInput): Promise<void> {
     return
   }
   await getSessionOperationOrchestrator(input.sessionId).stopTask(input.sessionId, input.taskId)
+}
+
+/**
+ * 获取活跃 Agent runtime 状态。
+ */
+export async function getAgentRuntimeState(input: GetRuntimeStateInput): Promise<AgentRuntimeStateResult> {
+  return getSessionOperationOrchestrator(input.sessionId).getActiveRuntimeState(input.sessionId)
 }
 
 /**
