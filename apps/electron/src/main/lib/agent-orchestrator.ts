@@ -226,6 +226,14 @@ function toPromaPiPermissionToolName(toolName: string): string {
   }
 }
 
+function formatPiPermissionDisplayName(toolName: string): string {
+  const parts = toolName.split('__')
+  if (parts[0] === 'mcp' && parts.length >= 3 && parts[1]) {
+    return `MCP ${parts[1]} / ${parts.slice(2).join('__')}`
+  }
+  return toolName
+}
+
 function buildPiCapabilityBoundaryPrompt(input: {
   userMessage: string
   workspaceName?: string
@@ -843,6 +851,7 @@ export class AgentOrchestrator {
           const structuredRequest = parsePiStructuredPermissionRequest(request)
           if (structuredRequest) {
             const toolName = toPromaPiPermissionToolName(structuredRequest.toolName)
+            const displayToolName = formatPiPermissionDisplayName(structuredRequest.toolName)
             if (permissionService.isSessionWhitelisted(sessionId, toolName, structuredRequest.toolInput)) {
               return { confirmed: true }
             }
@@ -858,8 +867,8 @@ export class AgentOrchestrator {
               decisionReason: 'Pi Agent 工具调用需要 Proma 权限确认',
               decisionReasonType: 'pi_tool_call',
               classifierApprovable: false,
-              sdkDisplayName: `Pi ${structuredRequest.toolName}`,
-              sdkTitle: `Pi 请求使用 ${structuredRequest.toolName}`,
+              sdkDisplayName: `Pi ${displayToolName}`,
+              sdkTitle: `Pi 请求使用 ${displayToolName}`,
               sdkDescription: structuredRequest.description,
             }
 

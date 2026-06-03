@@ -2989,6 +2989,102 @@ describe('AgentOrchestrator pi routing', () => {
     expect(result.permissionRequestIds).toEqual(['perm-1'])
   })
 
+  test('Given Pi MCP permission request When surfaced to Proma Then display names use MCP server and tool boundary', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+      const { permissionService } = await import('./agent-permission-service.ts')
+
+      const permissionPayload = {
+        promaPermissionRequest: true,
+        toolName: 'mcp__docs__inspect_result',
+        toolInput: { topic: 'alpha' },
+        description: '调用 MCP 工具: docs / inspect_result',
+        dangerLevel: 'normal',
+        toolCallId: 'tool-mcp-1',
+      }
+
+      class FakePiAdapter {
+        async *query(input) {
+          await input.handleExtensionUiRequest({
+            type: 'extension_ui_request',
+            id: 'perm-mcp-1',
+            method: 'confirm',
+            title: 'Proma Pi 权限确认',
+            message: JSON.stringify(permissionPayload),
+          })
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const eventBus = new AgentEventBus()
+      let permissionRequest = null
+      eventBus.use((sessionId, payload, next) => {
+        if (payload.kind === 'proma_event' && payload.event.type === 'permission_request') {
+          permissionRequest = payload.event.request
+          permissionService.respondToPermission(payload.event.request.requestId, 'allow', false)
+        }
+        next()
+      })
+
+      const orchestrator = new AgentOrchestrator(new FakePiAdapter(), eventBus, 'pi')
+
+      await orchestrator.sendMessage({
+        sessionId: 'session-pi-mcp-permission',
+        userMessage: 'call mcp',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        startedAt: 779,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      console.log(JSON.stringify({
+        toolName: permissionRequest?.toolName ?? null,
+        sdkDisplayName: permissionRequest?.sdkDisplayName ?? null,
+        sdkTitle: permissionRequest?.sdkTitle ?? null,
+        sdkDescription: permissionRequest?.sdkDescription ?? null,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('sdkDisplayName'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      toolName?: string | null
+      sdkDisplayName?: string | null
+      sdkTitle?: string | null
+      sdkDescription?: string | null
+    }
+
+    expect(result.toolName).toBe('mcp__docs__inspect_result')
+    expect(result.sdkDisplayName).toBe('Pi MCP docs / inspect_result')
+    expect(result.sdkTitle).toBe('Pi 请求使用 MCP docs / inspect_result')
+    expect(result.sdkDescription).toBe('调用 MCP 工具: docs / inspect_result')
+  })
+
   test('Given active session When stopping background task Then delegates to adapter stopTask', () => {
     const output = runOrchestratorScript(`
       import { mock } from 'bun:test'

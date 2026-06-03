@@ -2870,6 +2870,26 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
 - 已运行：
   - `bun test apps/electron/src/renderer/components/agent/tool-result-content.test.ts`：红灯确认缺少 `getPiMcpBridgeDisplay`，实现后 3 pass / 0 fail。
 
+## 2026-06-03 Phase J87 Pi MCP permission display labels
+
+- 背景：
+  - Pi MCP bridge 工具在结果 UI 中已经能显示 `MCP <server> / <tool>`。
+  - 结构化 Pi 权限请求仍把 `sdkDisplayName` / `sdkTitle` 写成原始工具名，例如 `Pi mcp__docs__inspect_result`，审批弹窗不如 Claude SDK MCP 工具直观。
+- 实现：
+  - `agent-orchestrator.ts`：
+    - 新增 Pi 权限展示名格式化：`mcp__docs__inspect_result` → `MCP docs / inspect_result`。
+    - Pi 结构化权限请求的 `toolName` 仍保留原始值，用于 Proma 权限判定和 always allow 白名单。
+    - `sdkDisplayName` / `sdkTitle` 改用可读 MCP 边界，例如 `Pi MCP docs / inspect_result`。
+  - 测试：
+    - `agent-orchestrator-pi-routing.test.ts` 模拟 Pi extension 结构化 MCP confirm 请求，验证审批请求保留原始 toolName，同时展示字段使用 MCP server/tool 边界。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.123`。
+- 当前边界：
+  - 这是权限 UI 文案 parity，不改变 permission mapping、风险分类或 allow-all/safe/ask 行为。
+  - 下一步可继续把 MCP 风险 hint 显示到审批弹窗，例如“只读 MCP 查询 / 可能修改远端状态”。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "Pi MCP permission request"`：红灯确认原始 `mcp__...` 展示名，实施后 1 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。
