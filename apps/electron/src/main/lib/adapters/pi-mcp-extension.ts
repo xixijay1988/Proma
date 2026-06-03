@@ -408,6 +408,7 @@ function createRemoteMcpTool(server, manifestItem) {
           content: normalizeMcpContentBlocks(result.content),
           structuredContent: result.structuredContent,
           details: {
+            bridgeType: 'proma-pi-mcp-remote-tool',
             server: server.name,
             toolName,
             nativeToolName,
@@ -420,6 +421,7 @@ function createRemoteMcpTool(server, manifestItem) {
         return {
           content: [{ type: 'text', text: formatMcpBridgeError(server, 'remote_tool', error, toolName) }],
           details: {
+            bridgeType: 'proma-pi-mcp-remote-tool',
             server: server.name,
             operation: 'remote_tool',
             toolName: tool.name,

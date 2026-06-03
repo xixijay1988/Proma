@@ -2776,6 +2776,28 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/adapters/pi-runtime-config.test.ts -t "switching runtime model"`：通过。
   - `bun run --filter='@proma/electron' typecheck`：通过。
 
+## 2026-06-03 Phase J83 Pi MCP remote tool provenance metadata
+
+- 背景：
+  - Pi MCP bridge 已经能在启动时枚举 MCP server tools，并注册 `mcp__<server>__<tool>` 逐工具 Pi 原生工具。
+  - Claude SDK MCP 工具调用天然带有清晰的 `mcp__server__tool` 工具名边界；Pi bridge 逐工具调用虽然工具名已对齐，但结果 `details` 里缺少稳定 provenance 字段，后续 UI、权限、诊断很难可靠地区分“逐工具 MCP bridge 调用”和服务器级 `call_tool` 兜底。
+- 实现：
+  - `pi-mcp-extension.ts`：
+    - 逐工具 MCP bridge 成功结果的 `details` 增加 `bridgeType: "proma-pi-mcp-remote-tool"`。
+    - 逐工具 MCP bridge 错误结果的 `details` 同样增加该字段。
+    - 保留既有 `server` / `toolName` / `nativeToolName` / `structuredContent`，不改变 Pi tool 注册名、调用参数或内容归一化。
+  - 测试：
+    - `pi-mcp-extension.test.ts` 使用真实 stdio MCP server 验证逐工具调用结果包含 `bridgeType`、`server`、`toolName`、`nativeToolName`。
+    - `pi-agent-adapter.test.ts` 验证 Pi RPC tool result 经过 SDKMessage 转换后仍保留这些 provenance details。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.119`。
+- 当前边界：
+  - 这是 metadata parity，不改变 MCP 调用能力本身。
+  - 服务器级 `mcp__<server>__call_tool` 暂不使用该 `bridgeType`，后续若要区分兜底调用，可单独补 `proma-pi-mcp-call-tool`。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-mcp-extension.test.ts -t "remote tool preserves structured MCP results"`：红灯确认缺少 `bridgeType`，实现后 3 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "Pi MCP tool result"`：通过。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

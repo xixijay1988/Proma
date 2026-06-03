@@ -17,6 +17,7 @@ interface PiToolExecutionResult {
     server?: string
     toolName?: string
     nativeToolName?: string
+    bridgeType?: string
     structuredContent?: unknown
     isError?: boolean
   }
@@ -672,6 +673,12 @@ describe('pi mcp extension', () => {
         params: { topic: 'alpha' },
       })
       expectStructuredFixtureResult(result, 'alpha')
+      expect(result.details).toMatchObject({
+        bridgeType: 'proma-pi-mcp-remote-tool',
+        server: 'docs',
+        toolName: 'inspect-result',
+        nativeToolName: 'mcp__docs__inspect_result',
+      })
     } finally {
       rmSync(configDir, { recursive: true, force: true })
     }

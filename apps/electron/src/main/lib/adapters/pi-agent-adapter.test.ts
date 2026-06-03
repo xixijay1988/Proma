@@ -2945,8 +2945,10 @@ describe('PiAgentAdapter', () => {
                   ok: true,
                 },
                 details: {
+                  bridgeType: 'proma-pi-mcp-remote-tool',
                   server: 'docs',
                   toolName: 'inspect-result',
+                  nativeToolName: 'mcp__docs__inspect_result',
                 },
               },
               isError: false,
@@ -2981,7 +2983,15 @@ describe('PiAgentAdapter', () => {
     const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('blockContent'))
     const result = JSON.parse(jsonLine ?? '{}') as {
       blockContent?: Array<{ type?: string; text?: string; data?: string; mimeType?: string }>
-      toolUseResult?: { structuredContent?: { topic?: string; ok?: boolean }; details?: { server?: string } }
+      toolUseResult?: {
+        structuredContent?: { topic?: string; ok?: boolean }
+        details?: {
+          bridgeType?: string
+          server?: string
+          toolName?: string
+          nativeToolName?: string
+        }
+      }
       resultSubtype?: string
     }
 
@@ -2991,7 +3001,12 @@ describe('PiAgentAdapter', () => {
       { type: 'text', text: '[MCP resource result]\n{"uri":"file:///alpha.txt"}' },
     ])
     expect(result.toolUseResult?.structuredContent).toEqual({ topic: 'alpha', ok: true })
-    expect(result.toolUseResult?.details?.server).toBe('docs')
+    expect(result.toolUseResult?.details).toMatchObject({
+      bridgeType: 'proma-pi-mcp-remote-tool',
+      server: 'docs',
+      toolName: 'inspect-result',
+      nativeToolName: 'mcp__docs__inspect_result',
+    })
     expect(result.resultSubtype).toBe('success')
   })
 
