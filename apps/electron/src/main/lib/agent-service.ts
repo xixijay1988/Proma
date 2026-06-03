@@ -510,7 +510,8 @@ export function stopAgent(sessionId: string): void {
  */
 export async function stopAgentTask(input: StopTaskInput): Promise<void> {
   if (input.type === 'shell') {
-    throw new Error('Shell 后台任务停止暂未接入 runtime 控制')
+    await getSessionOperationOrchestrator(input.sessionId).stopShellTask(input.sessionId, input.taskId)
+    return
   }
   await getSessionOperationOrchestrator(input.sessionId).stopTask(input.sessionId, input.taskId)
 }

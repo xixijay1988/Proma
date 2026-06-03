@@ -39,6 +39,7 @@ const KNOWN_PI_RPC_EVENT_TYPES = new Set([
   'turn_start',
 ])
 const PI_RUNTIME_COMMANDS = new Set([
+  'abort_bash',
   'clone',
   'fork',
   'get_fork_messages',
@@ -905,6 +906,19 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     const data = asRecord(response.data)
     const messages = Array.isArray(data?.messages) ? data.messages : []
     return messages.filter((message): message is SDKMessage => Boolean(asRecord(message)))
+  }
+
+  async stopShellTask(sessionId: string, taskId: string): Promise<void> {
+    if (!taskId.trim()) {
+      throw new Error('[Pi Agent] Shell taskId 不能为空')
+    }
+
+    await this.sendRuntimeCommand(
+      sessionId,
+      { type: 'abort_bash' },
+      'proma-abort-bash',
+    )
+    console.log(`[Pi Agent] Shell 任务停止请求已发送: sessionId=${sessionId}, taskId=${taskId}`)
   }
 
   dispose(): void {

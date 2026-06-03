@@ -604,6 +604,82 @@ describe('PiAgentAdapter', () => {
     expect(result.resultSubtype).toBe('success')
   })
 
+  test('Given active Pi query When shell task is stopped Then sends abort_bash command', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+      let releaseAgentEnd
+      let releaseResponse
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+      const waitForResponse = new Promise((resolve) => { releaseResponse = resolve })
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'abort_bash') {
+              queueMicrotask(() => releaseResponse({
+                type: 'response',
+                id: command.id,
+                command: 'abort_bash',
+                success: true,
+              }))
+            }
+          },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            const response = await waitForResponse
+            yield response
+            await waitForRelease
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const iterator = adapter.query({
+        sessionId: 'session-pi-stop-shell',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })[Symbol.asyncIterator]()
+
+      const firstYield = iterator.next()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      await adapter.stopShellTask('session-pi-stop-shell', 'shell-123')
+      releaseAgentEnd()
+      const resultMessage = await firstYield
+
+      console.log(JSON.stringify({
+        sentCommands,
+        resultType: resultMessage.value?.type,
+        resultSubtype: resultMessage.value?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('sentCommands'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{ type?: string; id?: string }>
+      resultType?: string
+      resultSubtype?: string
+    }
+
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'abort_bash'])
+    expect(result.sentCommands?.[1]?.id).toStartWith('proma-abort-bash-session-pi-stop-shell-')
+    expect(result.resultType).toBe('result')
+    expect(result.resultSubtype).toBe('success')
+  })
+
   test('Given active Pi query When runtime messages are requested Then sends get_messages command', () => {
     const output = runPiAdapterScript(`
       import { mock } from 'bun:test'
