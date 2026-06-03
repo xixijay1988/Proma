@@ -2963,6 +2963,19 @@ export class AgentOrchestrator {
     console.log(`[Agent 编排] 运行中权限模式已切换: sessionId=${sessionId}, mode=${mode}`)
   }
 
+  /**
+   * 同步活跃 runtime 的原生会话名称。
+   *
+   * 当前主要用于 Pi RPC 的 set_session_name；不支持该能力的 runtime 静默跳过。
+   */
+  async updateRuntimeSessionName(sessionId: string, name: string): Promise<void> {
+    if (!this.activeSessions.has(sessionId)) return
+    if (!this.adapter.setSessionName) return
+
+    await this.adapter.setSessionName(sessionId, name)
+    console.log(`[Agent 编排] 原生会话名称已同步: sessionId=${sessionId}, name=${name}`)
+  }
+
   // ===== 快照回退 =====
 
   /**

@@ -2666,6 +2666,27 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "session name"`：红灯确认 `setSessionName` 缺失，实现后 1 pass / 0 fail。
   - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "generates title"`：红灯确认自动标题未同步 Pi 原生名称，实现后 1 pass / 0 fail。
 
+## 2026-06-03 Phase J79 Pi manual rename native session sync
+
+- 背景：
+  - J78 已经把 Proma 自动生成标题同步到 Pi 原生 `sessionName`。
+  - 手动重命名仍然直接走 `ipc.ts -> updateAgentSessionMeta()`，没有经过 `agent-service` / `AgentOrchestrator`，所以活跃 Pi runtime 的原生命名不会同步。
+- 实现：
+  - `AgentOrchestrator` 新增 `updateRuntimeSessionName()`，仅在会话活跃且 adapter 支持 `setSessionName()` 时转发。
+  - `agent-service` 新增 `renameAgentSessionTitle()`：
+    - 先更新 Proma 会话元数据，保持用户重命名的本地持久化优先。
+    - 对非空标题 best-effort 同步活跃 runtime 的原生会话名，失败只记录 warning。
+  - `AGENT_IPC_CHANNELS.UPDATE_TITLE` 改为调用 `renameAgentSessionTitle()`，因此 UI 手动重命名会话时自动获得 Pi 原生命名同步。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.115`。
+- 当前边界：
+  - 只同步活跃 runtime；不活跃 Pi 会话的原生 JSONL 文件名/内容不会被后台改写。
+  - Proma 本地标题保留原输入；同步给 Pi 的名称会 trim，避免 Pi 原生命名为空或带首尾空格。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/agent-session-manager.test.ts -t "title is renamed"`：红灯确认 `renameAgentSessionTitle` 缺失，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-session-manager.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts`：110 pass / 0 fail。
+  - `git diff --check`：通过。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

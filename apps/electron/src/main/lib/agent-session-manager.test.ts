@@ -2556,4 +2556,115 @@ describe('Agent 会话引擎持久化', () => {
     expect(result.piEntryIds).toEqual(['existing-assistant', 'active-assistant'])
     expect(JSON.stringify(result.messageTexts)).toContain('active runtime answer')
   })
+
+  test('Given active pi session When title is renamed Then syncs Pi native session name', () => {
+    const output = runSessionManagerScript(`
+      import { mkdirSync, writeFileSync } from 'node:fs'
+      import { join } from 'node:path'
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: {
+          getFocusedWindow: () => null,
+          getAllWindows: () => [],
+        },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      const configDir = join(process.env.HOME, '.proma')
+      mkdirSync(configDir, { recursive: true })
+      writeFileSync(join(configDir, 'agent-workspaces.json'), JSON.stringify({
+        version: 2,
+        workspaces: [{
+          id: 'workspace-pi',
+          name: 'Pi',
+          slug: 'pi',
+          agentEngine: 'pi',
+          createdAt: 1,
+          updatedAt: 1,
+        }],
+      }))
+
+      const { createAgentSession, getAgentSessionMeta } = await import('./agent-session-manager.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const {
+        renameAgentSessionTitle,
+        __testTrackActiveSessionOrchestrator,
+        __testReleaseActiveSessionOrchestrator,
+      } = await import('./agent-service.ts')
+
+      const session = createAgentSession('旧标题', 'channel-1', 'workspace-pi', 'pi')
+      const sessionNameCalls = []
+      let releaseAgentEnd
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+      const adapter = {
+        query: async function* (input) {
+          yield await waitForRelease
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        },
+        abort: () => {},
+        dispose: () => {},
+        setSessionName: async (sessionId, name) => {
+          sessionNameCalls.push({ sessionId, name })
+        },
+      }
+      const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
+      __testTrackActiveSessionOrchestrator(session.id, orchestrator)
+
+      try {
+        const runPromise = orchestrator.sendMessage({
+          sessionId: session.id,
+          userMessage: '保持运行',
+          channelId: 'missing-channel',
+          modelId: 'model',
+          startedAt: 1001,
+        }, {
+          onError: () => {},
+          onComplete: () => {},
+          onTitleUpdated: () => {},
+          onRunStarted: () => {},
+        })
+        await new Promise((resolve) => setTimeout(resolve, 0))
+        const renamed = await renameAgentSessionTitle(session.id, ' 新标题 ')
+        releaseAgentEnd({
+          type: 'assistant',
+          message: { content: [{ type: 'text', text: 'done' }] },
+          parent_tool_use_id: null,
+          session_id: session.id,
+        })
+        await runPromise
+        const stored = getAgentSessionMeta(session.id)
+        console.log(JSON.stringify({
+          renamedTitle: renamed.title,
+          storedTitle: stored?.title ?? null,
+          sessionNameCalls,
+        }))
+      } finally {
+        __testReleaseActiveSessionOrchestrator(session.id, orchestrator)
+      }
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('sessionNameCalls'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      renamedTitle?: string
+      storedTitle?: string | null
+      sessionNameCalls?: Array<{ sessionId?: string; name?: string }>
+    }
+
+    expect(result.renamedTitle).toBe(' 新标题 ')
+    expect(result.storedTitle).toBe(' 新标题 ')
+    expect(result.sessionNameCalls).toEqual([{ sessionId: expect.any(String), name: '新标题' }])
+  })
 })

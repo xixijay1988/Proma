@@ -23,6 +23,7 @@ import type {
   AgentSavedFile,
   AgentStreamEvent,
   AgentStreamPayload,
+  AgentSessionMeta,
   AgentQueueMessageInput,
   StopTaskInput,
   AbortRuntimeRetryInput,
@@ -535,6 +536,24 @@ export async function updateAgentRuntimeQueueModes(input: UpdateRuntimeQueueMode
     steeringMode: input.steeringMode,
     followUpMode: input.followUpMode,
   })
+}
+
+/**
+ * 更新 Agent 会话标题，并尽量同步到活跃 runtime 的原生会话名称。
+ */
+export async function renameAgentSessionTitle(sessionId: string, title: string): Promise<AgentSessionMeta> {
+  const updated = updateAgentSessionMeta(sessionId, { title })
+  const runtimeTitle = title.trim()
+
+  if (runtimeTitle) {
+    await getSessionOperationOrchestrator(sessionId)
+      .updateRuntimeSessionName(sessionId, runtimeTitle)
+      .catch((error: unknown) => {
+        console.warn('[Agent 服务] 原生会话名称同步失败:', error)
+      })
+  }
+
+  return updated
 }
 
 /**
