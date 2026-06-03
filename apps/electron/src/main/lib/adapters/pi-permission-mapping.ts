@@ -30,6 +30,7 @@ const PROGRESS_TOOLS = new Set([
   'taskupdate',
   'taskget',
   'tasklist',
+  'taskoutput',
   'todowrite',
 ])
 

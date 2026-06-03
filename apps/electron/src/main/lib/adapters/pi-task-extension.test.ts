@@ -16,15 +16,18 @@ describe('pi task extension', () => {
         'TaskUpdate',
         'TaskGet',
         'TaskList',
+        'TaskOutput',
       ])
       expect(result.extensionPath).toContain('proma-task-bridge.mjs')
       expect(source).toContain("name: 'TaskCreate'")
       expect(source).toContain("name: 'TaskUpdate'")
       expect(source).toContain("name: 'TaskGet'")
       expect(source).toContain("name: 'TaskList'")
+      expect(source).toContain("name: 'TaskOutput'")
       expect(source).toContain('const tasks = new Map()')
       expect(source).toContain('JSON.stringify({ task }, null, 2)')
       expect(source).toContain('JSON.stringify({ tasks:')
+      expect(source).toContain('JSON.stringify({ output, isComplete, task }, null, 2)')
     } finally {
       rmSync(configDir, { recursive: true, force: true })
     }

@@ -100,7 +100,7 @@ function mapToolPermission(toolName, input) {
   const tool = normalizeToolName(toolName)
   const rawTool = String(toolName || '').trim().toLowerCase()
   const readTools = new Set(['glob', 'grep', 'find', 'ls', 'read', 'webfetch', 'websearch'])
-  const progressTools = new Set(['taskcreate', 'taskupdate', 'taskget', 'tasklist', 'todowrite'])
+  const progressTools = new Set(['taskcreate', 'taskupdate', 'taskget', 'tasklist', 'taskoutput', 'todowrite'])
   const writeTools = new Set(['edit', 'multiedit', 'notebookedit', 'write'])
   const shellTools = new Set(['bash', 'shell'])
 

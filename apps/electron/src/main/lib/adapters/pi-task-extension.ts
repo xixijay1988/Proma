@@ -17,6 +17,7 @@ const TASK_TOOL_NAMES = [
   'TaskUpdate',
   'TaskGet',
   'TaskList',
+  'TaskOutput',
 ]
 
 function serializeExtensionValue(value: unknown): string {
@@ -68,6 +69,23 @@ function taskResult(task) {
     content: [{ type: 'text', text: JSON.stringify({ task }, null, 2) }],
     details: { task },
   }
+}
+
+function formatTaskOutput(task) {
+  const lines = [
+    '任务: ' + task.subject,
+    '状态: ' + task.status,
+  ]
+  if (task.description) lines.push('说明: ' + task.description)
+  if (task.activeForm) lines.push('当前动作: ' + task.activeForm)
+  if (task.blocks.length > 0) lines.push('关联块: ' + task.blocks.join(', '))
+  lines.push('创建时间: ' + task.createdAt)
+  lines.push('更新时间: ' + task.updatedAt)
+  return lines.join('\\n')
+}
+
+function isTaskComplete(task) {
+  return ['completed', 'cancelled', 'error', 'deleted'].includes(task.status)
 }
 
 function errorResult(message) {
@@ -190,11 +208,37 @@ function createTaskListTool() {
   }
 }
 
+function createTaskOutputTool() {
+  return {
+    name: 'TaskOutput',
+    label: 'Task / output',
+    description: 'Read one Proma progress task output and completion state.',
+    promptSnippet: 'TaskOutput: read a Proma progress task output and whether it is complete.',
+    parameters: Type.Object({
+      taskId: Type.String({ description: 'Task id returned by TaskCreate.' }),
+      block: Type.Optional(Type.Boolean({ description: 'Accepted for Claude Agent SDK parity; Pi returns the latest task state immediately.' })),
+    }),
+    async execute(_toolCallId, params) {
+      const storedTask = tasks.get(String(params.taskId || ''))
+      if (!storedTask) return errorResult('Task not found: ' + String(params.taskId || ''))
+
+      const task = serializeTask(storedTask)
+      const output = formatTaskOutput(storedTask)
+      const isComplete = isTaskComplete(storedTask)
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ output, isComplete, task }, null, 2) }],
+        details: { output, isComplete, task },
+      }
+    },
+  }
+}
+
 export default async function (pi) {
   pi.registerTool(createTaskCreateTool())
   pi.registerTool(createTaskUpdateTool())
   pi.registerTool(createTaskGetTool())
   pi.registerTool(createTaskListTool())
+  pi.registerTool(createTaskOutputTool())
 }
 `
 }

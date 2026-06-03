@@ -28,6 +28,7 @@ describe('pi permission mapping', () => {
     expect(mapPiToolPermission({ mode: 'ask', toolName: 'TaskUpdate' })).toEqual({ behavior: 'allow' })
     expect(mapPiToolPermission({ mode: 'ask', toolName: 'TaskGet' })).toEqual({ behavior: 'allow' })
     expect(mapPiToolPermission({ mode: 'ask', toolName: 'TaskList' })).toEqual({ behavior: 'allow' })
+    expect(mapPiToolPermission({ mode: 'ask', toolName: 'TaskOutput' })).toEqual({ behavior: 'allow' })
   })
 
   test('Given safe mode When write tool requested Then ask', () => {
@@ -154,7 +155,7 @@ describe('pi permission mapping', () => {
       allowedDirectories: ['/tmp/workspace'],
     })
 
-    expect(source).toContain("const progressTools = new Set(['taskcreate', 'taskupdate', 'taskget', 'tasklist', 'todowrite'])")
+    expect(source).toContain("const progressTools = new Set(['taskcreate', 'taskupdate', 'taskget', 'tasklist', 'taskoutput', 'todowrite'])")
     expect(source).toContain("if (progressTools.has(tool)) return { behavior: 'allow', dangerLevel: 'safe' }")
   })
 

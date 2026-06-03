@@ -2415,6 +2415,31 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun run electron:build`：Electron build exit 0；保留既有 Vite large chunk warning。
   - `git diff --check`：无 whitespace 问题。
 
+## 2026-06-03 Phase J69 Pi TaskOutput parity
+
+- 背景：
+  - Claude/Proma 工具边界已有 `TaskOutput`，用于读取后台任务输出与完成状态。
+  - Pi task extension 此前只注入 `TaskCreate` / `TaskUpdate` / `TaskGet` / `TaskList`，导致 Pi runtime 对任务输出工具不完整。
+  - Pi 官方仍不支持 background bash；J69 不伪造后台 shell，而是补齐任务工具兼容层的 `TaskOutput`。
+- 实现：
+  - `Pi task extension`：
+    - `TASK_TOOL_NAMES` 新增 `TaskOutput`。
+    - 新增 `TaskOutput` 工具，参数为 `taskId` 与兼容用 `block?: boolean`。
+    - 返回 Proma/Claude 兼容结构：`{ output, isComplete, task }`。
+    - `isComplete` 在 `completed` / `cancelled` / `error` / `deleted` 时为 true。
+    - `block` 参数当前只作为 Claude SDK parity 输入接受，Pi 会立即返回当前任务快照，不等待后台进程。
+  - 权限：
+    - `TaskOutput` 加入 Pi progress/read-only allowlist。
+    - 生成的 Pi permission extension 同步免确认，避免读取任务输出时弹权限。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.105`。
+- 当前边界：
+  - `TaskOutput` 输出的是 Pi task extension 内存任务状态快照，不代表 Pi 原生 background bash 输出。
+  - Pi session 结束后 extension 内存任务表随 runtime 生命周期清理，历史仍以 Proma JSONL 中已持久化的 tool result 为准。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-task-extension.test.ts`：红灯确认缺少 `TaskOutput`，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts`：红灯确认 `TaskOutput` 未免确认，实现后 22 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。
