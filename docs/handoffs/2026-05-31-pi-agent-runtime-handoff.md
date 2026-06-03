@@ -2687,6 +2687,35 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/agent-session-manager.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts`：110 pass / 0 fail。
   - `git diff --check`：通过。
 
+## 2026-06-03 Phase J80 Pi runtime thinking level switching parity
+
+- 背景：
+  - Pi RPC 支持 `set_thinking_level`，且 `get_state` 会返回当前 `thinkingLevel`。
+  - Proma 之前只会在 Pi query 启动时根据设置同步初始推理深度；会话运行中只能展示状态，不能像 Claude SDK 路径的运行时控制一样动态调整。
+  - 这会让用户在长任务中无法根据当前任务复杂度临时提升或关闭 Pi reasoning effort。
+- 实现：
+  - `@proma/shared`：
+    - 新增 `PiRuntimeThinkingLevel` 与 `UpdateRuntimeThinkingLevelInput`。
+    - 新增 IPC 通道 `agent:update-runtime-thinking-level`。
+  - Main / Preload：
+    - `AgentOrchestrator.updateRuntimeThinkingLevel()` 校验会话活跃，并转发到支持 `setThinkingLevel()` 的 adapter。
+    - `agent-service`、`ipc.ts`、`preload/index.ts` 接入 `updateRuntimeThinkingLevel()`。
+  - Renderer：
+    - `PiRuntimeStatusPopover` 在 runtime 状态弹窗里新增“推理深度”控制，支持 `off` / `minimal` / `low` / `medium` / `high` / `xhigh`。
+    - 切换成功后重新读取 Pi runtime state，失败时在弹窗中展示错误。
+- 版本：
+  - `@proma/shared` patch bump 到 `0.1.62`。
+  - `@proma/electron` patch bump 到 `0.10.116`。
+- 当前边界：
+  - 只作用于活跃 Pi runtime，不修改 Proma 的全局/工作区默认 thinking 设置。
+  - Claude SDK 路径不展示该 Pi runtime 控制；不支持 `setThinkingLevel()` 的 adapter 会返回明确错误。
+  - 模型或 Pi runtime 自身不支持某个 thinking level 时，由 Pi RPC 返回错误，Proma 负责透传展示。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "thinking level is changed"`：红灯确认 `updateRuntimeThinkingLevel` 缺失；实现后通过。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "thinking level is changed|queue modes"`：2 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "thinking level"`：1 pass / 0 fail。
+  - `bun run --filter='@proma/electron' typecheck`：通过。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

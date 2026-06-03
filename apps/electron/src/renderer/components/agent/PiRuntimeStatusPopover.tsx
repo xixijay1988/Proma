@@ -1,5 +1,5 @@
 import * as React from 'react'
-import type { AgentRuntimeStateResult, PiRuntimeQueueMode } from '@proma/shared'
+import type { AgentRuntimeStateResult, PiRuntimeQueueMode, PiRuntimeThinkingLevel } from '@proma/shared'
 import { Activity, AlertCircle, Loader2, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -19,6 +19,15 @@ interface PiRuntimeStatusPopoverProps {
 const QUEUE_MODE_OPTIONS: Array<{ value: PiRuntimeQueueMode; label: string }> = [
   { value: 'one-at-a-time', label: '逐条' },
   { value: 'all', label: '全部' },
+]
+
+const THINKING_LEVEL_OPTIONS: Array<{ value: PiRuntimeThinkingLevel; label: string }> = [
+  { value: 'off', label: '关闭' },
+  { value: 'minimal', label: '极简' },
+  { value: 'low', label: '低' },
+  { value: 'medium', label: '中' },
+  { value: 'high', label: '高' },
+  { value: 'xhigh', label: '极高' },
 ]
 
 function getErrorMessage(error: unknown): string {
@@ -52,6 +61,15 @@ function CommandSourceBadge({ source }: { source: string }): React.ReactElement 
 
 function isPiRuntimeQueueMode(value: string | undefined): value is PiRuntimeQueueMode {
   return value === 'all' || value === 'one-at-a-time'
+}
+
+function isPiRuntimeThinkingLevel(value: string | undefined): value is PiRuntimeThinkingLevel {
+  return value === 'off'
+    || value === 'minimal'
+    || value === 'low'
+    || value === 'medium'
+    || value === 'high'
+    || value === 'xhigh'
 }
 
 function QueueModeControl({
@@ -92,10 +110,44 @@ function QueueModeControl({
   )
 }
 
+function ThinkingLevelControl({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: string | undefined
+  disabled: boolean
+  onChange: (level: PiRuntimeThinkingLevel) => void
+}): React.ReactElement {
+  const selected = isPiRuntimeThinkingLevel(value) ? value : undefined
+
+  return (
+    <div className="grid grid-cols-3 gap-1">
+      {THINKING_LEVEL_OPTIONS.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          className={cn(
+            'h-7 rounded-md px-2 text-[11px] font-medium transition-colors',
+            selected === option.value
+              ? 'bg-background text-foreground shadow-sm ring-1 ring-border'
+              : 'bg-muted text-muted-foreground hover:text-foreground',
+          )}
+          disabled={disabled || selected === option.value}
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 export function PiRuntimeStatusPopover({ sessionId, streaming }: PiRuntimeStatusPopoverProps): React.ReactElement {
   const [open, setOpen] = React.useState(false)
   const [loading, setLoading] = React.useState(false)
   const [updatingQueueMode, setUpdatingQueueMode] = React.useState(false)
+  const [updatingThinkingLevel, setUpdatingThinkingLevel] = React.useState(false)
   const [state, setState] = React.useState<AgentRuntimeStateResult | null>(null)
   const [error, setError] = React.useState<string | null>(null)
 
@@ -143,6 +195,23 @@ export function PiRuntimeStatusPopover({ sessionId, streaming }: PiRuntimeStatus
       setError(getErrorMessage(updateError))
     } finally {
       setUpdatingQueueMode(false)
+    }
+  }, [loadRuntimeState, sessionId])
+
+  const updateThinkingLevel = React.useCallback(async (thinkingLevel: PiRuntimeThinkingLevel): Promise<void> => {
+    setUpdatingThinkingLevel(true)
+    setError(null)
+    try {
+      await window.electronAPI.updateRuntimeThinkingLevel({
+        sessionId,
+        thinkingLevel,
+      })
+      await loadRuntimeState()
+    } catch (updateError) {
+      console.error('[PiRuntimeStatusPopover] 更新 Pi runtime 推理深度失败:', updateError)
+      setError(getErrorMessage(updateError))
+    } finally {
+      setUpdatingThinkingLevel(false)
     }
   }, [loadRuntimeState, sessionId])
 
@@ -212,6 +281,22 @@ export function PiRuntimeStatusPopover({ sessionId, streaming }: PiRuntimeStatus
                 {rows.map((row) => (
                   <StatusRow key={row.label} label={row.label} value={row.value} />
                 ))}
+              </div>
+
+              <div className="h-px bg-border" />
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-foreground">推理深度</span>
+                  {updatingThinkingLevel && (
+                    <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+                  )}
+                </div>
+                <ThinkingLevelControl
+                  value={state.thinkingLevel}
+                  disabled={loading || updatingThinkingLevel}
+                  onChange={(level) => void updateThinkingLevel(level)}
+                />
               </div>
 
               <div className="h-px bg-border" />

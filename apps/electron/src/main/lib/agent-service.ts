@@ -28,6 +28,7 @@ import type {
   StopTaskInput,
   AbortRuntimeRetryInput,
   UpdateRuntimeQueueModesInput,
+  UpdateRuntimeThinkingLevelInput,
   PromaPermissionMode,
   AgentExternalRunSource,
   AgentEngine,
@@ -536,6 +537,16 @@ export async function updateAgentRuntimeQueueModes(input: UpdateRuntimeQueueMode
     steeringMode: input.steeringMode,
     followUpMode: input.followUpMode,
   })
+}
+
+/**
+ * 更新活跃 runtime 的推理深度。
+ */
+export async function updateAgentRuntimeThinkingLevel(input: UpdateRuntimeThinkingLevelInput): Promise<void> {
+  await getSessionOperationOrchestrator(input.sessionId).updateRuntimeThinkingLevel(
+    input.sessionId,
+    input.thinkingLevel,
+  )
 }
 
 /**

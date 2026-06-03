@@ -1061,6 +1061,9 @@ export interface AbortRuntimeRetryInput {
 /** Pi runtime 队列投递模式 */
 export type PiRuntimeQueueMode = 'all' | 'one-at-a-time'
 
+/** Pi runtime 推理深度 */
+export type PiRuntimeThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+
 /**
  * 更新 runtime 队列投递模式请求
  */
@@ -1071,6 +1074,16 @@ export interface UpdateRuntimeQueueModesInput {
   steeringMode?: PiRuntimeQueueMode
   /** follow-up 队列投递模式 */
   followUpMode?: PiRuntimeQueueMode
+}
+
+/**
+ * 更新 runtime 推理深度请求
+ */
+export interface UpdateRuntimeThinkingLevelInput {
+  /** 会话 ID */
+  sessionId: string
+  /** Pi runtime 推理深度 */
+  thinkingLevel: PiRuntimeThinkingLevel
 }
 
 // ===== Agent Runtime 状态 =====
@@ -1533,6 +1546,8 @@ export const AGENT_IPC_CHANNELS = {
   ABORT_RUNTIME_RETRY: 'agent:abort-runtime-retry',
   /** 更新 runtime 队列投递模式 */
   UPDATE_RUNTIME_QUEUE_MODES: 'agent:update-runtime-queue-modes',
+  /** 更新 runtime 推理深度 */
+  UPDATE_RUNTIME_THINKING_LEVEL: 'agent:update-runtime-thinking-level',
   /** 获取活跃 runtime 状态 */
   GET_RUNTIME_STATE: 'agent:get-runtime-state',
 

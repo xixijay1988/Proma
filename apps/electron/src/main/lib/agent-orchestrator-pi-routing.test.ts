@@ -3225,6 +3225,81 @@ describe('AgentOrchestrator pi routing', () => {
     expect(result.followUpModeCalls).toEqual([{ sessionId: 'session-set-queue-modes', mode: 'one-at-a-time' }])
   })
 
+  test('Given active session When thinking level is changed Then delegates to adapter thinking command', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+
+      let releaseAgentEnd
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+
+      class FakeAdapter {
+        thinkingLevelCalls = []
+
+        async *query(input) {
+          await waitForRelease
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        async setThinkingLevel(sessionId, level) {
+          this.thinkingLevelCalls.push({ sessionId, level })
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const adapter = new FakeAdapter()
+      const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
+      const runPromise = orchestrator.sendMessage({
+        sessionId: 'session-set-thinking-level',
+        userMessage: 'run task',
+        channelId: 'missing-channel',
+        modelId: 'model',
+        startedAt: 995,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await orchestrator.updateRuntimeThinkingLevel('session-set-thinking-level', 'xhigh')
+      releaseAgentEnd()
+      await runPromise
+
+      console.log(JSON.stringify({
+        thinkingLevelCalls: adapter.thinkingLevelCalls,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('thinkingLevelCalls'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      thinkingLevelCalls?: Array<{ sessionId?: string; level?: string }>
+    }
+
+    expect(result.thinkingLevelCalls).toEqual([{ sessionId: 'session-set-thinking-level', level: 'xhigh' }])
+  })
+
   test('Given active session When stopping shell task Then delegates to adapter stopShellTask', () => {
     const output = runOrchestratorScript(`
       import { mock } from 'bun:test'

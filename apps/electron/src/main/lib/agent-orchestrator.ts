@@ -3251,6 +3251,23 @@ export class AgentOrchestrator {
   }
 
   /**
+   * 更新活跃 runtime 的推理深度。
+   *
+   * Pi RPC 支持 set_thinking_level；不支持该能力的 runtime 会明确报错。
+   */
+  async updateRuntimeThinkingLevel(sessionId: string, level: string): Promise<void> {
+    if (!this.activeSessions.has(sessionId)) {
+      throw new Error(`[Agent 编排] 会话未运行，无法更新推理深度: ${sessionId}`)
+    }
+
+    if (!this.adapter.setThinkingLevel) {
+      throw new Error('[Agent 编排] 当前适配器不支持推理深度切换')
+    }
+
+    await this.adapter.setThinkingLevel(sessionId, level)
+  }
+
+  /**
    * 停止活跃 runtime 中的 Shell 任务。
    *
    * Pi RPC 支持 abort_bash；不支持该能力的 runtime 会在此处明确报错。

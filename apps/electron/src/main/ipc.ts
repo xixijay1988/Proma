@@ -65,6 +65,7 @@ import type {
   StopTaskInput,
   AbortRuntimeRetryInput,
   UpdateRuntimeQueueModesInput,
+  UpdateRuntimeThinkingLevelInput,
   GetRuntimeStateInput,
   AgentRuntimeStateResult,
   WorkspaceMcpConfig,
@@ -189,7 +190,7 @@ import {
   searchAgentSessionReferences,
   getAgentTaskOutput,
 } from './lib/agent-session-manager'
-import { runAgent, stopAgent, stopAgentTask, abortAgentRuntimeRetry, updateAgentRuntimeQueueModes, renameAgentSessionTitle, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, forkAgentSession, cloneActiveAgentSession, switchActiveAgentSession, setPiSessionFileForNextRun, syncPiNativeSessionMessages, applyPiGitCheckpointForSession, getAgentRuntimeState } from './lib/agent-service'
+import { runAgent, stopAgent, stopAgentTask, abortAgentRuntimeRetry, updateAgentRuntimeQueueModes, updateAgentRuntimeThinkingLevel, renameAgentSessionTitle, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, forkAgentSession, cloneActiveAgentSession, switchActiveAgentSession, setPiSessionFileForNextRun, syncPiNativeSessionMessages, applyPiGitCheckpointForSession, getAgentRuntimeState } from './lib/agent-service'
 import { assertAgentSessionForkSupported } from './lib/agent-session-capabilities'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
@@ -2144,6 +2145,19 @@ export function registerIpcHandlers(): void {
         await updateAgentRuntimeQueueModes(input)
       } catch (error) {
         console.error('[IPC] 更新 runtime 队列模式失败:', error)
+        throw error
+      }
+    }
+  )
+
+  // 更新 runtime 推理深度
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.UPDATE_RUNTIME_THINKING_LEVEL,
+    async (_, input: UpdateRuntimeThinkingLevelInput): Promise<void> => {
+      try {
+        await updateAgentRuntimeThinkingLevel(input)
+      } catch (error) {
+        console.error('[IPC] 更新 runtime 推理深度失败:', error)
         throw error
       }
     }
