@@ -2488,6 +2488,35 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "image input" --timeout 30000`：红灯确认 orchestrator 未透传 images，实现后 1 pass / 0 fail。
   - `bun test apps/electron/src/renderer/components/agent/agent-runtime-images.test.ts`：红灯确认 helper 缺失，实现后 2 pass / 0 fail。
 
+## 2026-06-03 Phase J72 Pi queued image input bridge
+
+- 背景：
+  - J71 已把初始 prompt 图片桥接到 Pi RPC `prompt.images`。
+  - Pi RPC 的运行中追加同样通过 `prompt + streamingBehavior` 支持 `images`；但 Proma 的 `AgentQueueMessageInput` / `SDKUserMessageInput` 仍只透传文本。
+  - 这会导致 Pi 在“运行中追加消息”场景下仍弱于 Claude SDK 的多模态体验。
+- 实现：
+  - `@proma/shared`：
+    - `AgentQueueMessageInput` 新增 `images?: AgentRuntimeImageInput[]`。
+    - `SDKUserMessageInput` 新增 `images?: AgentRuntimeImageInput[]`。
+  - Renderer：
+    - `agent-runtime-images.ts` 新增 `buildQueueableAgentRuntimeImages()`，只允许非 path-backed、base64 可用的 `image/*` 作为运行中追加 payload。
+    - `AgentView.handleSend()` 在 streaming 分支允许追加这些内联图片，并通过 `queueAgentMessage()` 传给主进程。
+    - 普通文件、path-backed 图片、数据已失效的图片仍保持提示，要求等待当前 turn 完成后再作为文件附件发送。
+  - Main / Pi adapter：
+    - `queueAgentMessage()` / `AgentOrchestrator.queueMessage()` 将 `images` 透传到 `SDKUserMessageInput`。
+    - `PiAgentAdapter.sendQueuedMessage()` 在 queued `prompt` command 中带上 `images`，保留 `streamingBehavior: "steer" | "followUp"`。
+- 版本：
+  - `@proma/shared` patch bump 到 `0.1.59`。
+  - `@proma/electron` patch bump 到 `0.10.108`。
+- 当前边界：
+  - 运行中追加仍要求有文本说明；纯图片追加暂不开放，避免 Pi prompt message 为空。
+  - queued images 仅在 Pi adapter 消费；Claude SDK 路径仍保持既有文本 queue 行为。
+  - path-backed 图片不会被隐式读取成 base64，仍需走会话完成后的文件引用路径。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "queued image inputs" --timeout 30000`：红灯确认 queued prompt command 缺少 images，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "queued image input" --timeout 30000`：红灯确认 orchestrator 未透传 queued images，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/renderer/components/agent/agent-runtime-images.test.ts -t "queueable"`：红灯确认 helper 缺失，实现后 queueable 用例通过；随后全文件 4 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

@@ -109,7 +109,7 @@ import {
   hasAgentRuntimeAvailableModel,
   isAgentRuntimeSelectedModelAvailable,
 } from '@/lib/agent-runtime-channel-options'
-import { buildAgentRuntimeImages } from './agent-runtime-images.ts'
+import { buildAgentRuntimeImages, buildQueueableAgentRuntimeImages } from './agent-runtime-images.ts'
 
 /** 稳定的空 SDKMessage 数组引用，避免 ?? [] 每次创建新引用 */
 const EMPTY_SDK_MESSAGES: SDKMessage[] = []
@@ -1410,14 +1410,36 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
     // 上一条消息仍在处理中，直接追加发送
     if (streaming) {
-      // 流式追加时不处理附件（仅支持纯文本）
+      const runtimeImageQueue = buildQueueableAgentRuntimeImages({
+        pendingFiles,
+        readFileData: (fileId) => window.__pendingAgentFileData?.get(fileId),
+      })
+      const runtimeImages = runtimeImageQueue.images
+
+      // 流式追加只支持可直接传给 runtime 的图片；其他附件仍需等待本轮结束后保存为文件引用。
       if (pendingFiles.length > 0) {
-        toast.info('Agent 运行中暂不支持追加发送附件', {
-          description: '请等待完成后再发送附件，或先撤除附件仅发送文本',
+        if (!runtimeImageQueue.canQueue) {
+          toast.info('Agent 运行中暂不支持追加发送这些附件', {
+            description: `请等待完成后再发送文件附件：${runtimeImageQueue.unsupportedFiles.join('、')}`,
+          })
+          return
+        }
+        if (!effectiveText) {
+          toast.info('请为追加图片补充一段文字说明', {
+            description: '运行中的 Agent 追加消息需要文本来说明图片用途。',
+          })
+          return
+        }
+      }
+
+      if (!effectiveText.trim()) {
+        toast.info('请输入要追加的消息', {
+          description: '运行中追加消息需要文本内容。',
         })
         return
       }
 
+      const queuedPendingFiles = pendingFiles
       const localUuid = crypto.randomUUID()
 
       // 1. 立即注入 liveMessages（作为普通用户消息显示）
@@ -1452,8 +1474,16 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       window.electronAPI.queueAgentMessage({
         sessionId,
         userMessage: effectiveText,
+        ...(runtimeImages.length > 0 && { images: runtimeImages }),
         uuid: localUuid,
         interrupt: true,
+      }).then(() => {
+        if (runtimeImages.length === 0) return
+        for (const file of queuedPendingFiles) {
+          if (file.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(file.previewUrl)
+          window.__pendingAgentFileData?.delete(file.id)
+        }
+        setPendingFiles([])
       }).catch((error) => {
         console.error('[AgentView] 追加消息失败:', error)
         toast.error('追加消息失败', { description: String(error) })

@@ -3108,7 +3108,7 @@ export class AgentOrchestrator {
     text: string,
     _priority?: string,
     presetUuid?: string,
-    opts?: { interrupt?: boolean },
+    opts?: { interrupt?: boolean; images?: AgentSendInput['images'] },
   ): Promise<string> {
     if (!this.activeSessions.has(sessionId)) {
       throw new Error(`[Agent 编排] 会话未运行，无法追加消息: ${sessionId}`)
@@ -3133,6 +3133,7 @@ export class AgentOrchestrator {
       priority: 'now' as const,
       uuid,
       session_id: sessionId,
+      ...(opts?.images && opts.images.length > 0 ? { images: opts.images } : {}),
     }
 
     try {

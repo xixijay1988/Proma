@@ -857,6 +857,8 @@ export interface AgentQueueMessageInput {
   sessionId: string
   /** 用户消息内容 */
   userMessage: string
+  /** 用户本轮附带的图片输入（base64，不包含 data URL 前缀） */
+  images?: AgentRuntimeImageInput[]
   /** 前端预生成的 UUID（用于乐观更新去重） */
   uuid?: string
   /**

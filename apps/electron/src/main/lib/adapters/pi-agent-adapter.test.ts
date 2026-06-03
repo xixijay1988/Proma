@@ -330,6 +330,91 @@ describe('PiAgentAdapter', () => {
     expect(result.resultSubtype).toBe('success')
   })
 
+  test('Given active Pi query with queued image inputs When queued message is sent Then passes images to RPC prompt command', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+      let releaseAgentEnd
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => { sentCommands.push(command) },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            await waitForRelease
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const iterator = adapter.query({
+        sessionId: 'session-pi-queued-image',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })[Symbol.asyncIterator]()
+
+      const firstYield = iterator.next()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      await adapter.sendQueuedMessage('session-pi-queued-image', {
+        type: 'user',
+        message: { role: 'user', content: 'queued image' },
+        parent_tool_use_id: null,
+        priority: 'now',
+        uuid: 'queued-image-1',
+        session_id: 'session-pi-queued-image',
+        images: [
+          {
+            type: 'image',
+            data: 'iVBORw0KGgo=',
+            mimeType: 'image/png',
+            filename: 'diagram.png',
+          },
+        ],
+      })
+
+      releaseAgentEnd()
+      await firstYield
+
+      console.log(JSON.stringify({ sentCommands }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('sentCommands'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{
+        type?: string
+        message?: string
+        images?: Array<{ type?: string; data?: string; mimeType?: string; filename?: string }>
+      }>
+    }
+
+    expect(result.sentCommands?.[1]).toMatchObject({
+      type: 'prompt',
+      message: 'queued image',
+      streamingBehavior: 'steer',
+      images: [
+        {
+          type: 'image',
+          data: 'iVBORw0KGgo=',
+          mimeType: 'image/png',
+          filename: 'diagram.png',
+        },
+      ],
+    })
+  })
+
   test('Given active Pi query When later queued message is sent Then queues follow-up through prompt streaming behavior', () => {
     const output = runPiAdapterScript(`
       import { mock } from 'bun:test'

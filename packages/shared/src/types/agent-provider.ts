@@ -12,6 +12,8 @@ import type { AgentRuntimeImageInput, SDKMessage } from './agent'
 export interface SDKUserMessageInput {
   type: 'user'
   message: { role: 'user'; content: string }
+  /** 用户本轮附带的图片输入（base64，不包含 data URL 前缀） */
+  images?: AgentRuntimeImageInput[]
   parent_tool_use_id: null
   priority?: 'now' | 'next' | 'later'
   uuid?: string

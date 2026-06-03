@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   buildAgentRuntimeImages,
+  buildQueueableAgentRuntimeImages,
 } from './agent-runtime-images.ts'
 
 describe('Agent runtime images', () => {
@@ -54,5 +55,54 @@ describe('Agent runtime images', () => {
     })
 
     expect(images).toEqual([])
+  })
+
+  test('Given only inline image files When building queueable runtime images Then allows queued image payloads', () => {
+    const result = buildQueueableAgentRuntimeImages({
+      pendingFiles: [
+        {
+          id: 'image-1',
+          filename: 'diagram.png',
+          mediaType: 'image/png',
+          size: 128,
+        },
+      ],
+      readFileData: (id) => id === 'image-1' ? 'iVBORw0KGgo=' : undefined,
+    })
+
+    expect(result.canQueue).toBe(true)
+    expect(result.images).toEqual([
+      {
+        type: 'image',
+        data: 'iVBORw0KGgo=',
+        mimeType: 'image/png',
+        filename: 'diagram.png',
+      },
+    ])
+    expect(result.unsupportedFiles).toEqual([])
+  })
+
+  test('Given mixed pending files When building queueable runtime images Then reports unsupported files', () => {
+    const result = buildQueueableAgentRuntimeImages({
+      pendingFiles: [
+        {
+          id: 'image-1',
+          filename: 'diagram.png',
+          mediaType: 'image/png',
+          size: 128,
+        },
+        {
+          id: 'notes-1',
+          filename: 'notes.txt',
+          mediaType: 'text/plain',
+          size: 64,
+        },
+      ],
+      readFileData: (id) => id === 'image-1' ? 'iVBORw0KGgo=' : undefined,
+    })
+
+    expect(result.canQueue).toBe(false)
+    expect(result.images).toHaveLength(1)
+    expect(result.unsupportedFiles).toEqual(['notes.txt'])
   })
 })

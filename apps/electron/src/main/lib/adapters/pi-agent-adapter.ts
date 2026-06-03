@@ -1168,6 +1168,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       type: 'prompt',
       message: text,
       streamingBehavior: message.priority === 'now' ? 'steer' : 'followUp',
+      ...(message.images && message.images.length > 0 ? { images: message.images } : {}),
     })
   }
 
