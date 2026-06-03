@@ -2643,6 +2643,29 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "interrupted softly|queued message is sent|queued prompt is rejected"`：红灯确认 `interruptQuery` 缺失，实现后 5 pass / 0 fail。
   - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "queueing interrupting message|queueing message|stopping"`：7 pass / 0 fail。
 
+## 2026-06-03 Phase J78 Pi native session name sync
+
+- 背景：
+  - Proma 已经会基于第一次用户消息自动生成 Agent 会话标题，但 Pi 原生 runtime 的 `sessionName` 不会同步更新。
+  - Pi RPC 提供 `set_session_name` 命令，`get_state` 也会通过 `sessionName` 暴露当前原生名称；Proma 之前只解析展示，没有写回能力。
+  - Claude SDK 没有对应的运行中 native session name API，因此该能力以 adapter optional method 形式补齐，不影响 Claude 路径。
+- 实现：
+  - `@proma/shared`：
+    - `AgentProviderAdapter` 新增可选 `setSessionName(sessionId, name)`。
+  - Main：
+    - `PiAgentAdapter` 将 `set_session_name` 加入 runtime command 白名单。
+    - 新增 `setSessionName()`，对空名称做保护，并通过 Pi RPC 发送 `{ type: "set_session_name", name }`。
+    - `AgentOrchestrator.autoGenerateTitle()` 在 Proma 元数据和 UI 回调更新后，best-effort 调用 adapter 的 `setSessionName()`。
+- 版本：
+  - `@proma/shared` patch bump 到 `0.1.61`。
+  - `@proma/electron` patch bump 到 `0.10.114`。
+- 当前边界：
+  - 仅同步自动标题生成结果；用户手动重命名会话后的 Pi 原生命名同步还需要后续从会话 meta 更新入口接入。
+  - 如果 Pi runtime 不活跃或 RPC 命令失败，Proma 标题仍然保留，只记录中文 warning。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "session name"`：红灯确认 `setSessionName` 缺失，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "generates title"`：红灯确认自动标题未同步 Pi 原生名称，实现后 1 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

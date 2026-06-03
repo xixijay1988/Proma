@@ -383,6 +383,8 @@ describe('AgentOrchestrator pi routing', () => {
       const { createAgentSession, getAgentSessionMeta } = await import('./agent-session-manager.ts')
 
       class FakePiAdapter {
+        sessionNameCalls = []
+
         async *query(input) {
           yield {
             type: 'assistant',
@@ -398,12 +400,17 @@ describe('AgentOrchestrator pi routing', () => {
           }
         }
 
+        async setSessionName(sessionId, name) {
+          this.sessionNameCalls.push({ sessionId, name })
+        }
+
         abort() {}
         dispose() {}
       }
 
       const session = createAgentSession(undefined, 'title-channel', undefined, 'pi')
-      const orchestrator = new AgentOrchestrator(new FakePiAdapter(), new AgentEventBus(), 'pi')
+      const adapter = new FakePiAdapter()
+      const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
       const titlePromise = new Promise((resolve) => {
         globalThis.resolveTitle = resolve
       })
@@ -436,6 +443,7 @@ describe('AgentOrchestrator pi routing', () => {
         titleFromCallback,
         callbackTitle,
         storedTitle: updated?.title ?? null,
+        sessionNameCalls: adapter.sessionNameCalls,
       }))
     `)
 
@@ -445,12 +453,14 @@ describe('AgentOrchestrator pi routing', () => {
       titleFromCallback?: string | null
       callbackTitle?: string | null
       storedTitle?: string | null
+      sessionNameCalls?: Array<{ sessionId?: string; name?: string }>
     }
 
     expect(result.initialTitle).toBe('新 Agent 会话')
     expect(result.titleFromCallback).toBe('项目结构分析')
     expect(result.callbackTitle).toBe('项目结构分析')
     expect(result.storedTitle).toBe('项目结构分析')
+    expect(result.sessionNameCalls).toEqual([{ sessionId: expect.any(String), name: '项目结构分析' }])
   })
 
   test('Given user renames pi session while title is generating When title returns Then keeps manual title', () => {

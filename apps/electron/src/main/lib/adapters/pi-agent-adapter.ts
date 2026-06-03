@@ -59,6 +59,7 @@ const PI_RUNTIME_COMMANDS = new Set([
   'set_auto_compaction',
   'set_auto_retry',
   'set_follow_up_mode',
+  'set_session_name',
   'set_steering_mode',
   'set_thinking_level',
   'switch_session',
@@ -1364,6 +1365,19 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       sessionId,
       { type: 'set_follow_up_mode', mode: normalizePiQueueMode(mode) },
       'proma-set-follow-up-mode',
+    )
+  }
+
+  async setSessionName(sessionId: string, name: string): Promise<void> {
+    const trimmedName = name.trim()
+    if (!trimmedName) {
+      throw new Error('[Pi Agent] session name 不能为空')
+    }
+
+    await this.sendRuntimeCommand(
+      sessionId,
+      { type: 'set_session_name', name: trimmedName },
+      'proma-set-session-name',
     )
   }
 

@@ -1531,6 +1531,11 @@ export class AgentOrchestrator {
 
       updateAgentSessionMeta(sessionId, { title })
       callbacks.onTitleUpdated(title)
+      if (this.adapter.setSessionName) {
+        this.adapter.setSessionName(sessionId, title).catch((error: unknown) => {
+          console.warn('[Agent 编排] Pi 原生会话名称同步失败:', error)
+        })
+      }
       console.log(`[Agent 编排] 自动标题生成完成: "${title}"`)
     } catch (error) {
       console.warn('[Agent 编排] 自动标题生成失败:', error)
