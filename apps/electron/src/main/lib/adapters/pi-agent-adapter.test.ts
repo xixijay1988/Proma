@@ -680,6 +680,95 @@ describe('PiAgentAdapter', () => {
     expect(result.resultSubtype).toBe('success')
   })
 
+  test('Given active Pi query When compacting session Then sends compact command and returns compact system messages', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+      let releaseAgentEnd
+      let releaseResponse
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+      const waitForResponse = new Promise((resolve) => { releaseResponse = resolve })
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'compact') {
+              queueMicrotask(() => releaseResponse({
+                type: 'response',
+                id: command.id,
+                command: 'compact',
+                success: true,
+                data: {
+                  summary: '压缩后的摘要',
+                  firstKeptEntryId: 'entry-2',
+                  tokensBefore: 1234,
+                },
+              }))
+            }
+          },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            const response = await waitForResponse
+            yield response
+            await waitForRelease
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const iterator = adapter.query({
+        sessionId: 'session-pi-compact',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })[Symbol.asyncIterator]()
+
+      const firstYield = iterator.next()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      const compactMessages = await adapter.compact('session-pi-compact')
+      releaseAgentEnd()
+      const resultMessage = await firstYield
+
+      console.log(JSON.stringify({
+        sentCommands,
+        compactMessages,
+        resultType: resultMessage.value?.type,
+        resultSubtype: resultMessage.value?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('compactMessages'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{ type?: string; id?: string }>
+      compactMessages?: Array<{ type?: string; subtype?: string; summary?: string; tokens_before?: number }>
+      resultType?: string
+      resultSubtype?: string
+    }
+
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'compact'])
+    expect(result.sentCommands?.[1]?.id).toStartWith('proma-compact-session-pi-compact-')
+    expect(result.compactMessages?.map((message) => `${message.type}:${message.subtype}`)).toEqual([
+      'system:compacting',
+      'system:compact_boundary',
+    ])
+    expect(result.compactMessages?.[1]?.summary).toBe('压缩后的摘要')
+    expect(result.compactMessages?.[1]?.tokens_before).toBe(1234)
+    expect(result.resultType).toBe('result')
+    expect(result.resultSubtype).toBe('success')
+  })
+
   test('Given active Pi query When runtime messages are requested Then sends get_messages command', () => {
     const output = runPiAdapterScript(`
       import { mock } from 'bun:test'

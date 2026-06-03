@@ -1091,6 +1091,28 @@ export class AgentOrchestrator {
       callbacks.onRunStarted?.({ startedAt: streamStartedAt })
       startTitleGeneration()
 
+      if (userMessage.trim() === '/compact') {
+        if (!this.adapter.compact) {
+          throw new Error('[Agent 编排] 当前 Pi runtime 不支持上下文压缩')
+        }
+
+        const compactMessages = await this.adapter.compact(sessionId)
+        for (const compactMessage of compactMessages) {
+          this.eventBus.emit(sessionId, { kind: 'sdk_message', message: compactMessage })
+          if (
+            compactMessage.type === 'system'
+            && (compactMessage as import('@proma/shared').SDKSystemMessage).subtype === 'compact_boundary'
+          ) {
+            accumulatedMessages.push(compactMessage)
+          }
+        }
+
+        this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - runStartedAt)
+        releaseActiveRun()
+        callbacks.onComplete(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt, resultSubtype: 'success' })
+        return
+      }
+
       for await (const msg of this.adapter.query({
         sessionId,
         prompt: buildPiRuntimePrompt({

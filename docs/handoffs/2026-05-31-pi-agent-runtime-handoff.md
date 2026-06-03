@@ -2033,6 +2033,41 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun run typecheck`：通过。
   - `bun run electron:build`：通过，仅既有 Vite chunk-size warning。
 
+## 2026-06-03 Phase J57 Pi /compact 原生压缩路径
+
+- 背景：
+  - Proma renderer 已有 `/compact` UX：发送 `/compact` 后进入压缩态，并能消费 `compacting` / `compact_boundary` 系统事件。
+  - Claude SDK 路径已有上下文压缩体验；Pi runtime 已在 RPC 层暴露 `compact` 命令，但 J57 前 Pi 会把 `/compact` 当普通用户提示词发送给模型。
+  - 这会导致 Pi 模式下压缩语义不稳定，也无法可靠持久化压缩边界。
+- 实现：
+  - `AgentProviderAdapter` 新增可选能力 `compact(sessionId, customInstructions?)`。
+  - `PiAgentAdapter.compact()`：
+    - 向 Pi RPC 发送 `{ type: 'compact' }`，请求 id 前缀为 `proma-compact`。
+    - 支持可选 `customInstructions`，当前 UI 尚未暴露自定义指令入口。
+    - 将 Pi compact response 转换为 Proma 兼容 SDKMessage：
+      - `system / compacting`
+      - `system / compact_boundary`
+    - 映射 `summary`、`firstKeptEntryId`、`tokensBefore` 到 Proma 的压缩边界字段。
+  - `AgentOrchestrator.runPiSession()`：
+    - 持久化用户 `/compact` 后识别该命令并走 `adapter.compact()`。
+    - 向 event bus 推送 `compacting` 与 `compact_boundary`，驱动现有 UI。
+    - 只持久化 `compact_boundary`，不持久化瞬态 `compacting`。
+    - 不再调用普通 `adapter.query()`，避免模型把 `/compact` 当聊天内容处理。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.93`。
+  - `@proma/shared` patch bump 到 `0.1.48`。
+- 当前边界：
+  - Pi 原生 compact 依赖 Pi runtime 和当前模型认证可用。
+  - Proma 侧已预留 `customInstructions` 入参，但 UI 暂未提供自定义压缩指令。
+  - 这只补齐当前活跃 Pi 会话的 `/compact` 路径，不改变 fork/rewind/resume 等仍待补齐能力。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts --test-name-pattern "compacting session" --timeout 30000`：红灯确认 `adapter.compact is not a function`，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --test-name-pattern "compact command" --timeout 30000`：红灯确认普通 `query` 被调用，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --timeout 30000`：49 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-session-manager.test.ts apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/adapters/pi-process.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts apps/electron/src/main/lib/adapters/pi-git-checkpoint-extension.test.ts apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts apps/electron/src/main/lib/adapters/pi-mcp-extension.test.ts apps/electron/src/main/lib/adapters/pi-memory-extension.test.ts apps/electron/src/main/lib/adapters/pi-nano-banana-extension.test.ts apps/electron/src/main/lib/adapters/pi-task-extension.test.ts --timeout 30000`：137 pass / 0 fail。
+  - `bun run typecheck`：通过。
+  - `bun run electron:build`：通过，仅既有 Vite chunk-size warning。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

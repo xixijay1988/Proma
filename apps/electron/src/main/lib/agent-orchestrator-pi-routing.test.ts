@@ -636,6 +636,105 @@ describe('AgentOrchestrator pi routing', () => {
     expect(result.prompt).toContain('你背后是什么 Agent SDK？')
   })
 
+  test('Given pi engine When compact command is sent Then delegates to runtime compact and persists boundary', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+      const { getAgentSessionSDKMessages } = await import('./agent-session-manager.ts')
+
+      class FakePiAdapter {
+        queryCalls = 0
+        compactCalls = []
+
+        async *query(input) {
+          this.queryCalls += 1
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        async compact(sessionId, customInstructions) {
+          this.compactCalls.push({ sessionId, customInstructions: customInstructions ?? null })
+          return [
+            { type: 'system', subtype: 'compacting', session_id: sessionId },
+            { type: 'system', subtype: 'compact_boundary', summary: 'Pi 压缩摘要', tokens_before: 42, session_id: sessionId },
+          ]
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const adapter = new FakePiAdapter()
+      const eventBus = new AgentEventBus()
+      const streamedMessages = []
+      eventBus.use((sessionId, payload, next) => {
+        if (payload.kind === 'sdk_message') streamedMessages.push(payload.message)
+        next()
+      })
+
+      const orchestrator = new AgentOrchestrator(adapter, eventBus, 'pi')
+      let completeResultSubtype = null
+
+      await orchestrator.sendMessage({
+        sessionId: 'session-pi-compact-route',
+        userMessage: '/compact',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        startedAt: 801,
+      }, {
+        onError: () => {},
+        onComplete: (_messages, opts) => { completeResultSubtype = opts?.resultSubtype ?? null },
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      const persisted = getAgentSessionSDKMessages('session-pi-compact-route')
+
+      console.log(JSON.stringify({
+        queryCalls: adapter.queryCalls,
+        compactCalls: adapter.compactCalls,
+        streamedSystemSubtypes: streamedMessages.filter((message) => message.type === 'system').map((message) => message.subtype),
+        persistedSystemSubtypes: persisted.filter((message) => message.type === 'system').map((message) => message.subtype),
+        persistedUserTexts: persisted.filter((message) => message.type === 'user').map((message) => message.message?.content?.[0]?.text ?? ''),
+        completeResultSubtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('compactCalls'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      queryCalls?: number
+      compactCalls?: Array<{ sessionId?: string; customInstructions?: string | null }>
+      streamedSystemSubtypes?: string[]
+      persistedSystemSubtypes?: string[]
+      persistedUserTexts?: string[]
+      completeResultSubtype?: string | null
+    }
+
+    expect(result.queryCalls).toBe(0)
+    expect(result.compactCalls).toEqual([{ sessionId: 'session-pi-compact-route', customInstructions: null }])
+    expect(result.streamedSystemSubtypes).toEqual(['compacting', 'compact_boundary'])
+    expect(result.persistedSystemSubtypes).toEqual(['compact_boundary'])
+    expect(result.persistedUserTexts).toEqual(['/compact'])
+    expect(result.completeResultSubtype).toBe('success')
+  })
+
   test('Given pi transient deltas When run completes Then persists only final assistant content', () => {
     const output = runOrchestratorScript(`
       import { mock } from 'bun:test'

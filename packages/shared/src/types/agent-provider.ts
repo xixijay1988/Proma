@@ -133,6 +133,8 @@ export interface AgentProviderAdapter {
   stopTask?(sessionId: string, taskId: string): Promise<void>
   /** 停止活跃 runtime 中的 Shell 任务（可选，仅支持具备 Shell 控制的 Provider） */
   stopShellTask?(sessionId: string, taskId: string): Promise<void>
+  /** 压缩活跃 runtime 的会话上下文（可选，仅支持具备原生 compact 的 Provider） */
+  compact?(sessionId: string, customInstructions?: string): Promise<SDKMessage[]>
   /** 动态切换活跃查询的权限模式（可选，仅支持 SDK 原生 setPermissionMode 的 Provider） */
   setPermissionMode?(sessionId: string, mode: string): Promise<void>
   /** 获取活跃 runtime 的原生 fork 候选消息（可选，仅支持具备 session tree 的 Provider） */

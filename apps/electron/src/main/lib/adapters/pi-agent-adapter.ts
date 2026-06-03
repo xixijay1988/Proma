@@ -41,6 +41,7 @@ const KNOWN_PI_RPC_EVENT_TYPES = new Set([
 const PI_RUNTIME_COMMANDS = new Set([
   'abort_bash',
   'clone',
+  'compact',
   'fork',
   'get_fork_messages',
   'get_messages',
@@ -491,6 +492,33 @@ function parseSwitchSessionResultData(data: unknown): AgentRuntimeSwitchSessionR
   }
 }
 
+function createPiCompactMessages(input: {
+  sessionId: string
+  data: unknown
+}): SDKMessage[] {
+  const dataRecord = asRecord(input.data) ?? {}
+  const summary = getString(dataRecord, 'summary') ?? 'Pi 已完成上下文压缩'
+  const firstKeptEntryId = getString(dataRecord, 'firstKeptEntryId')
+  const tokensBeforeValue = dataRecord.tokensBefore
+  const tokensBefore = typeof tokensBeforeValue === 'number' ? tokensBeforeValue : undefined
+
+  return [
+    {
+      type: 'system',
+      subtype: 'compacting',
+      session_id: input.sessionId,
+    },
+    {
+      type: 'system',
+      subtype: 'compact_boundary',
+      summary,
+      ...(firstKeptEntryId ? { first_kept_entry_id: firstKeptEntryId } : {}),
+      ...(tokensBefore != null ? { tokens_before: tokensBefore } : {}),
+      session_id: input.sessionId,
+    },
+  ] as unknown as SDKMessage[]
+}
+
 function isExtensionUiDialogMethod(method: string): boolean {
   return method === 'confirm' || method === 'select' || method === 'input' || method === 'editor'
 }
@@ -919,6 +947,19 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       'proma-abort-bash',
     )
     console.log(`[Pi Agent] Shell 任务停止请求已发送: sessionId=${sessionId}, taskId=${taskId}`)
+  }
+
+  async compact(sessionId: string, customInstructions?: string): Promise<SDKMessage[]> {
+    const response = await this.sendRuntimeCommand(
+      sessionId,
+      {
+        type: 'compact',
+        ...(customInstructions?.trim() ? { customInstructions: customInstructions.trim() } : {}),
+      },
+      'proma-compact',
+    )
+
+    return createPiCompactMessages({ sessionId, data: response.data })
   }
 
   dispose(): void {
