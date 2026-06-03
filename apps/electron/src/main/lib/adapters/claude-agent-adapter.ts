@@ -18,6 +18,7 @@ import type {
   JsonSchemaOutputFormat,
   SDKMessage,
   PromaPermissionMode,
+  AgentRuntimeImageInput,
 } from '@proma/shared'
 import {
   THINKING_SIGNATURE_ERROR_MESSAGE,
@@ -33,6 +34,10 @@ type SDKQuery = ReturnType<typeof import('@anthropic-ai/claude-agent-sdk').query
 
 /** SDK 用户消息类型 */
 type SDKUserMessage = import('@anthropic-ai/claude-agent-sdk').SDKUserMessage
+
+/** Claude SDK 用户消息 content，可为纯文本或多模态 block 数组 */
+type ClaudeUserContent = import('@anthropic-ai/sdk/resources/messages').MessageParam['content']
+type ClaudeContentBlock = import('@anthropic-ai/sdk/resources/messages').ContentBlockParam
 
 // ============================================================================
 // 长生命周期消息通道
@@ -108,6 +113,52 @@ function createMessageChannel(signal: AbortSignal): MessageChannel {
       }
     },
   }
+}
+
+function isClaudeImageMimeType(mimeType: string): mimeType is 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' {
+  return mimeType === 'image/jpeg'
+    || mimeType === 'image/png'
+    || mimeType === 'image/gif'
+    || mimeType === 'image/webp'
+}
+
+function buildClaudeUserContent(text: string, images?: AgentRuntimeImageInput[]): ClaudeUserContent {
+  if (!images || images.length === 0) {
+    return text
+  }
+
+  const content: ClaudeContentBlock[] = [
+    { type: 'text', text },
+  ]
+
+  for (const image of images) {
+    if (!isClaudeImageMimeType(image.mimeType)) {
+      console.warn(`[Claude 适配器] 跳过不支持的图片 MIME 类型: ${image.mimeType}`)
+      continue
+    }
+
+    content.push({
+      type: 'image',
+      source: {
+        type: 'base64',
+        data: image.data,
+        media_type: image.mimeType,
+      },
+    })
+  }
+
+  return content
+}
+
+function buildClaudeUserMessage(message: SDKUserMessageInput): SDKUserMessage {
+  const { images, ...sdkMessage } = message
+  return {
+    ...sdkMessage,
+    message: {
+      ...message.message,
+      content: buildClaudeUserContent(message.message.content, images),
+    },
+  } as SDKUserMessage
 }
 
 // ============================================================================
@@ -751,7 +802,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
         session_id: options.sessionId,
         message: {
           role: 'user' as const,
-          content: options.prompt,
+          content: buildClaudeUserContent(options.prompt, options.images),
         },
         parent_tool_use_id: null,
       } as import('@anthropic-ai/claude-agent-sdk').SDKUserMessage)
@@ -855,7 +906,7 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
       throw new Error(`[Claude 适配器] 无活跃消息通道可注入队列消息: ${sessionId}`)
     }
     // 通过消息通道入队，generator 会自动 yield 给 SDK
-    channel.enqueue(message as import('@anthropic-ai/claude-agent-sdk').SDKUserMessage)
+    channel.enqueue(buildClaudeUserMessage(message))
     console.log(`[Claude 适配器] 队列消息已注入: sessionId=${sessionId}, uuid=${message.uuid}, priority=${message.priority}`)
   }
 

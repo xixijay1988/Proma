@@ -2538,6 +2538,31 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "queued prompt is rejected" --timeout 30000`：红灯确认旧实现静默成功，实现后 1 pass / 0 fail。
   - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "queued message|queued image|follow-up|queued prompt is rejected|queued adapter rejects" --timeout 30000`：6 pass / 0 fail。
 
+## 2026-06-03 Phase J74 Claude image input parity
+
+- 背景：
+  - J71/J72 已把 Proma Agent UI 的 inline image payload 接入 Pi 初始 prompt 与运行中追加消息。
+  - 但统一类型 `AgentQueryInput.images` / `SDKUserMessageInput.images` 在 Claude SDK adapter 中仍未被消费，导致 Claude 路径继续只收到纯文本 content。
+  - 这会让同一套 Proma 附件语义只对 Pi 生效，不利于后续按 Claude Agent SDK 做功能 parity 对齐。
+- 实现：
+  - `ClaudeAgentAdapter` 新增 `buildClaudeUserContent()`：
+    - 无图片时保持原有字符串 content，兼容现有 Claude 文本会话。
+    - 有图片时转换为 Anthropic `MessageParam.content` block 数组：`text` + `image/base64`。
+    - 仅透传 Claude SDK 支持的 `image/jpeg` / `image/png` / `image/gif` / `image/webp`，不支持的 MIME 会打印中文 warning 并跳过。
+  - 初始 `query()` 入队和 `sendQueuedMessage()` 队列注入都改为使用统一转换。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.110`。
+- 当前边界：
+  - 这次只补 provider-neutral image payload 的 Claude 消费路径，不改变 renderer 对 path-backed/大文件图片的保守策略。
+  - 如果用户选择的 Claude SDK 兼容渠道或模型本身不支持视觉输入，后续错误仍由底层 Provider/SDK 返回。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/claude-agent-adapter.test.ts --timeout 30000`：红灯确认旧实现 content 仍是字符串，实现后 2 pass / 0 fail。
+  - `bun run --filter='@proma/electron' typecheck`：通过。
+  - `git diff --check`：通过。
+  - `bun test`：285 pass / 0 fail。
+  - `bun run typecheck`：4 个 workspace 全部通过。
+  - `bun run electron:build`：通过；仅保留既有 Vite large chunk warning。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。
