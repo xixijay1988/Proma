@@ -1,4 +1,4 @@
-import type { PromaPermissionMode } from '@proma/shared'
+import type { PiMcpPermissionRiskHint, PromaPermissionMode } from '@proma/shared'
 
 export type PiPermissionMode = 'safe' | 'ask' | 'allow-all'
 export type PiPermissionDangerLevel = 'low' | 'medium' | 'high'
@@ -7,6 +7,7 @@ export interface PiPermissionInput {
   mode: PiPermissionMode
   toolName: string
   toolDescription?: string
+  mcpRiskHint?: PiMcpPermissionRiskHint
 }
 
 export type PiPermissionDecision =
@@ -88,6 +89,14 @@ export function mapPiToolPermission(input: PiPermissionInput): PiPermissionDecis
 
   if (rawToolName.startsWith('mcp__') && rawToolName.endsWith('__list_tools')) {
     return { behavior: 'allow' }
+  }
+
+  if (input.mcpRiskHint?.risk === 'read') {
+    return { behavior: 'allow' }
+  }
+
+  if (input.mcpRiskHint?.risk === 'write') {
+    return { behavior: 'ask', dangerLevel: 'medium' }
   }
 
   if (isReadLikeMcpRemoteTool(rawToolName, input.toolDescription)) {

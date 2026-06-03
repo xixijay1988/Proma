@@ -2944,6 +2944,28 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts`：25 pass / 0 fail。
   - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "Pi MCP permission request"`：1 pass / 0 fail。
 
+## 2026-06-03 Phase J90 Pi MCP permission mapping consumes structured risk hints
+
+- 背景：
+  - J89 已经把 Pi MCP 风险提示结构化传到 `PermissionRequest`，运行时生成的 permission extension 也会优先使用 `__PROMA_PI_MCP_TOOL_RISK_HINTS__`。
+  - TypeScript 侧的 `mapPiToolPermission()` 仍只靠工具名和 description 推断 MCP read/write，导致测试契约和运行时逻辑可能漂移。
+- 实现：
+  - `pi-permission-mapping.ts`：
+    - `PiPermissionInput` 新增可选 `mcpRiskHint`。
+    - MCP `read` hint 优先自动允许，即使工具名不够明确。
+    - MCP `write` hint 优先要求审批，即使工具名看起来像 read/search。
+    - `allow-all` 仍最先放行，保持 Proma 完全访问模式语义。
+  - 测试：
+    - `pi-permission-mapping.test.ts` 覆盖 read hint override 和 write hint override。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.126`。
+- 当前边界：
+  - 这是权限决策契约 parity，不改变生成的 Pi runtime extension 行为；它已经在 J88/J89 使用同一份 risk hints。
+  - 后续可以继续把 `mcpRiskHint` 用于权限历史与 MCP/Skills 能力边界诊断。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts -t "MCP risk hint"`：红灯确认 mapping 未消费结构化 hint，实施后 3 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts`：27 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

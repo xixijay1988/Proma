@@ -66,6 +66,36 @@ describe('pi permission mapping', () => {
     })
   })
 
+  test('Given ask mode When MCP risk hint is read Then allow even if the remote tool name is ambiguous', () => {
+    expect(mapPiToolPermission({
+      mode: 'ask',
+      toolName: 'mcp__docs__inspect_result',
+      mcpRiskHint: {
+        risk: 'read',
+        server: 'docs',
+        toolName: 'inspect_result',
+      },
+    })).toEqual({
+      behavior: 'allow',
+    })
+  })
+
+  test('Given ask mode When MCP risk hint is write Then ask even if the remote tool name looks read-like', () => {
+    expect(mapPiToolPermission({
+      mode: 'ask',
+      toolName: 'mcp__docs__search_docs',
+      toolDescription: 'Search documentation and return matching pages.',
+      mcpRiskHint: {
+        risk: 'write',
+        server: 'docs',
+        toolName: 'search_docs',
+      },
+    })).toEqual({
+      behavior: 'ask',
+      dangerLevel: 'medium',
+    })
+  })
+
   test('Given safe mode When MCP remote tool description mentions mutation Then ask even if name looks read-like', () => {
     expect(mapPiToolPermission({
       mode: 'safe',
