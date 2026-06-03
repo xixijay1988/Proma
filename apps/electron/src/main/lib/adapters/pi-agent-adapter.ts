@@ -1160,12 +1160,13 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       throw new Error('[Pi Agent] 追加消息内容为空')
     }
 
-    // Proma 的运行中追加默认是"立即打断当前 turn 并续跑"，
-    // 对应 Pi RPC 的 steer；非 now 优先级保留为 follow_up 兜底。
+    // 运行中追加仍走 prompt，让 Pi 保留 /skill、prompt template 与 extension command 展开语义。
+    // streamingBehavior 只负责告诉 Pi 如何排队当前消息。
     piProcess.send({
-      id: `proma-${message.priority === 'now' ? 'steer' : 'follow-up'}-${message.uuid ?? Date.now()}`,
-      type: message.priority === 'now' ? 'steer' : 'follow_up',
+      id: `proma-queued-prompt-${message.uuid ?? Date.now()}`,
+      type: 'prompt',
       message: text,
+      streamingBehavior: message.priority === 'now' ? 'steer' : 'followUp',
     })
   }
 

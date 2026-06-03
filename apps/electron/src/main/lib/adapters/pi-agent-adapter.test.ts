@@ -245,10 +245,79 @@ describe('PiAgentAdapter', () => {
       resultSubtype?: string
     }
 
-    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'steer'])
-    expect(result.sentCommands?.[1]).toMatchObject({ type: 'steer', message: 'queued now' })
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'prompt'])
+    expect(result.sentCommands?.[1]).toMatchObject({
+      type: 'prompt',
+      message: 'queued now',
+      streamingBehavior: 'steer',
+    })
     expect(result.resultType).toBe('result')
     expect(result.resultSubtype).toBe('success')
+  })
+
+  test('Given active Pi query When later queued message is sent Then queues follow-up through prompt streaming behavior', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+      let releaseAgentEnd
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => { sentCommands.push(command) },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            await waitForRelease
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const iterator = adapter.query({
+        sessionId: 'session-pi-follow-up',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })[Symbol.asyncIterator]()
+
+      const firstYield = iterator.next()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await adapter.sendQueuedMessage('session-pi-follow-up', {
+        type: 'user',
+        message: { role: 'user', content: 'queued later' },
+        parent_tool_use_id: null,
+        priority: 'later',
+        uuid: 'queued-later-1',
+        session_id: 'session-pi-follow-up',
+      })
+
+      releaseAgentEnd()
+      await firstYield
+
+      console.log(JSON.stringify({ sentCommands }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('sentCommands'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{ type?: string; message?: string; streamingBehavior?: string }>
+    }
+
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'prompt'])
+    expect(result.sentCommands?.[1]).toMatchObject({
+      type: 'prompt',
+      message: 'queued later',
+      streamingBehavior: 'followUp',
+    })
   })
 
   test('Given active Pi query When fork messages are requested Then returns Pi native fork candidates', () => {

@@ -2440,6 +2440,26 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/adapters/pi-task-extension.test.ts`：红灯确认缺少 `TaskOutput`，实现后 1 pass / 0 fail。
   - `bun test apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts`：红灯确认 `TaskOutput` 未免确认，实现后 22 pass / 0 fail。
 
+## 2026-06-03 Phase J70 Pi queued prompt streaming behavior
+
+- 背景：
+  - Pi RPC 文档说明：流式运行中若继续发送 `prompt`，可通过 `streamingBehavior: "steer" | "followUp"` 控制排队方式。
+  - Pi 原生 `steer` / `follow_up` 命令不允许 extension commands，而 `prompt` 会保留 Skill commands、prompt templates 与 extension commands 的展开/执行路径。
+  - Proma 之前在 `sendQueuedMessage()` 中直接发送 `steer` / `follow_up`，这会让 Pi 运行中追加消息的能力边界窄于 Claude SDK 路径。
+- 实现：
+  - `PiAgentAdapter.sendQueuedMessage()`：
+    - 运行中追加消息统一发送 `type: "prompt"`。
+    - `priority: "now"` 映射为 `streamingBehavior: "steer"`。
+    - 其他优先级映射为 `streamingBehavior: "followUp"`。
+    - command id 改为 `proma-queued-prompt-*`，表明这是 prompt 排队语义而非裸 steer/follow_up。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.106`。
+- 当前边界：
+  - J70 不改变 Proma renderer 队列 UI，也不新增 queue mode 设置入口。
+  - 当前 `SDKUserMessageInput` 仍只包含文本；Pi RPC 图片队列能力尚未接入 Proma Agent 输入链路。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "queued message" --timeout 30000`：红灯确认旧实现发送 `steer`，实现后 2 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。
