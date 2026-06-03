@@ -1058,6 +1058,18 @@ export interface AbortRuntimeRetryInput {
   sessionId: string
 }
 
+/**
+ * 更新 runtime 自动控制请求
+ */
+export interface UpdateRuntimeAutoControlsInput {
+  /** 会话 ID */
+  sessionId: string
+  /** Runtime 是否启用自动压缩 */
+  autoCompactionEnabled?: boolean
+  /** Runtime 是否启用自动重试 */
+  autoRetryEnabled?: boolean
+}
+
 /** Pi runtime 队列投递模式 */
 export type PiRuntimeQueueMode = 'all' | 'one-at-a-time'
 
@@ -1544,6 +1556,8 @@ export const AGENT_IPC_CHANNELS = {
   STOP_TASK: 'agent:stop-task',
   /** 中止 runtime 自动重试 */
   ABORT_RUNTIME_RETRY: 'agent:abort-runtime-retry',
+  /** 更新 runtime 自动控制 */
+  UPDATE_RUNTIME_AUTO_CONTROLS: 'agent:update-runtime-auto-controls',
   /** 更新 runtime 队列投递模式 */
   UPDATE_RUNTIME_QUEUE_MODES: 'agent:update-runtime-queue-modes',
   /** 更新 runtime 推理深度 */

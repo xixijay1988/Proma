@@ -64,6 +64,7 @@ import type {
   GetTaskOutputResult,
   StopTaskInput,
   AbortRuntimeRetryInput,
+  UpdateRuntimeAutoControlsInput,
   UpdateRuntimeQueueModesInput,
   UpdateRuntimeThinkingLevelInput,
   GetRuntimeStateInput,
@@ -190,7 +191,7 @@ import {
   searchAgentSessionReferences,
   getAgentTaskOutput,
 } from './lib/agent-session-manager'
-import { runAgent, stopAgent, stopAgentTask, abortAgentRuntimeRetry, updateAgentRuntimeQueueModes, updateAgentRuntimeThinkingLevel, renameAgentSessionTitle, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, forkAgentSession, cloneActiveAgentSession, switchActiveAgentSession, setPiSessionFileForNextRun, syncPiNativeSessionMessages, applyPiGitCheckpointForSession, getAgentRuntimeState } from './lib/agent-service'
+import { runAgent, stopAgent, stopAgentTask, abortAgentRuntimeRetry, updateAgentRuntimeAutoControls, updateAgentRuntimeQueueModes, updateAgentRuntimeThinkingLevel, renameAgentSessionTitle, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, forkAgentSession, cloneActiveAgentSession, switchActiveAgentSession, setPiSessionFileForNextRun, syncPiNativeSessionMessages, applyPiGitCheckpointForSession, getAgentRuntimeState } from './lib/agent-service'
 import { assertAgentSessionForkSupported } from './lib/agent-session-capabilities'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
@@ -2132,6 +2133,19 @@ export function registerIpcHandlers(): void {
         await abortAgentRuntimeRetry(input)
       } catch (error) {
         console.error('[IPC] 中止自动重试失败:', error)
+        throw error
+      }
+    }
+  )
+
+  // 更新 runtime 自动控制
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.UPDATE_RUNTIME_AUTO_CONTROLS,
+    async (_, input: UpdateRuntimeAutoControlsInput): Promise<void> => {
+      try {
+        await updateAgentRuntimeAutoControls(input)
+      } catch (error) {
+        console.error('[IPC] 更新 runtime 自动控制失败:', error)
         throw error
       }
     }

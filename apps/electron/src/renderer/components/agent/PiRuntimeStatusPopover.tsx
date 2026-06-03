@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import {
   getPiRuntimeCommandGroups,
@@ -143,9 +144,38 @@ function ThinkingLevelControl({
   )
 }
 
+function AutoControlSwitch({
+  label,
+  description,
+  checked,
+  disabled,
+  onChange,
+}: {
+  label: string
+  description: string
+  checked: boolean
+  disabled: boolean
+  onChange: (checked: boolean) => void
+}): React.ReactElement {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md bg-muted/50 px-2 py-2">
+      <div className="min-w-0">
+        <div className="text-[11px] font-medium text-foreground">{label}</div>
+        <div className="mt-0.5 text-[11px] text-muted-foreground">{description}</div>
+      </div>
+      <Switch
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={onChange}
+      />
+    </div>
+  )
+}
+
 export function PiRuntimeStatusPopover({ sessionId, streaming }: PiRuntimeStatusPopoverProps): React.ReactElement {
   const [open, setOpen] = React.useState(false)
   const [loading, setLoading] = React.useState(false)
+  const [updatingAutoControls, setUpdatingAutoControls] = React.useState(false)
   const [updatingQueueMode, setUpdatingQueueMode] = React.useState(false)
   const [updatingThinkingLevel, setUpdatingThinkingLevel] = React.useState(false)
   const [state, setState] = React.useState<AgentRuntimeStateResult | null>(null)
@@ -195,6 +225,26 @@ export function PiRuntimeStatusPopover({ sessionId, streaming }: PiRuntimeStatus
       setError(getErrorMessage(updateError))
     } finally {
       setUpdatingQueueMode(false)
+    }
+  }, [loadRuntimeState, sessionId])
+
+  const updateAutoControl = React.useCallback(async (
+    key: 'autoCompactionEnabled' | 'autoRetryEnabled',
+    checked: boolean,
+  ): Promise<void> => {
+    setUpdatingAutoControls(true)
+    setError(null)
+    try {
+      await window.electronAPI.updateRuntimeAutoControls({
+        sessionId,
+        [key]: checked,
+      })
+      await loadRuntimeState()
+    } catch (updateError) {
+      console.error('[PiRuntimeStatusPopover] 更新 Pi runtime 自动控制失败:', updateError)
+      setError(getErrorMessage(updateError))
+    } finally {
+      setUpdatingAutoControls(false)
     }
   }, [loadRuntimeState, sessionId])
 
@@ -281,6 +331,31 @@ export function PiRuntimeStatusPopover({ sessionId, streaming }: PiRuntimeStatus
                 {rows.map((row) => (
                   <StatusRow key={row.label} label={row.label} value={row.value} />
                 ))}
+              </div>
+
+              <div className="h-px bg-border" />
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-foreground">自动控制</span>
+                  {updatingAutoControls && (
+                    <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+                  )}
+                </div>
+                <AutoControlSwitch
+                  label="自动压缩"
+                  description="上下文接近上限时由 Pi runtime 压缩"
+                  checked={state.autoCompactionEnabled === true}
+                  disabled={loading || updatingAutoControls}
+                  onChange={(checked) => void updateAutoControl('autoCompactionEnabled', checked)}
+                />
+                <AutoControlSwitch
+                  label="自动重试"
+                  description="Provider / runtime 瞬时失败时自动重试"
+                  checked={state.autoRetryEnabled === true}
+                  disabled={loading || updatingAutoControls}
+                  onChange={(checked) => void updateAutoControl('autoRetryEnabled', checked)}
+                />
               </div>
 
               <div className="h-px bg-border" />

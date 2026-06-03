@@ -53,6 +53,7 @@ import type {
   GetTaskOutputResult,
   StopTaskInput,
   AbortRuntimeRetryInput,
+  UpdateRuntimeAutoControlsInput,
   UpdateRuntimeQueueModesInput,
   UpdateRuntimeThinkingLevelInput,
   GetRuntimeStateInput,
@@ -505,6 +506,9 @@ export interface ElectronAPI {
 
   /** 中止 runtime 自动重试 */
   abortRuntimeRetry: (input: AbortRuntimeRetryInput) => Promise<void>
+
+  /** 更新 runtime 自动控制 */
+  updateRuntimeAutoControls: (input: UpdateRuntimeAutoControlsInput) => Promise<void>
 
   /** 更新 runtime 队列投递模式 */
   updateRuntimeQueueModes: (input: UpdateRuntimeQueueModesInput) => Promise<void>
@@ -1519,6 +1523,10 @@ const electronAPI: ElectronAPI = {
 
   abortRuntimeRetry: (input: AbortRuntimeRetryInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.ABORT_RUNTIME_RETRY, input)
+  },
+
+  updateRuntimeAutoControls: (input: UpdateRuntimeAutoControlsInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_RUNTIME_AUTO_CONTROLS, input)
   },
 
   updateRuntimeQueueModes: (input: UpdateRuntimeQueueModesInput) => {

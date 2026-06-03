@@ -3223,6 +3223,34 @@ export class AgentOrchestrator {
   }
 
   /**
+   * 更新活跃 runtime 的自动压缩 / 自动重试开关。
+   *
+   * Pi RPC 支持 set_auto_compaction / set_auto_retry；不支持该能力的 runtime 会明确报错。
+   */
+  async updateRuntimeAutoControls(
+    sessionId: string,
+    input: { autoCompactionEnabled?: boolean; autoRetryEnabled?: boolean },
+  ): Promise<void> {
+    if (!this.activeSessions.has(sessionId)) {
+      throw new Error(`[Agent 编排] 会话未运行，无法更新自动控制: ${sessionId}`)
+    }
+
+    if (typeof input.autoCompactionEnabled === 'boolean') {
+      if (!this.adapter.setAutoCompaction) {
+        throw new Error('[Agent 编排] 当前适配器不支持自动压缩切换')
+      }
+      await this.adapter.setAutoCompaction(sessionId, input.autoCompactionEnabled)
+    }
+
+    if (typeof input.autoRetryEnabled === 'boolean') {
+      if (!this.adapter.setAutoRetry) {
+        throw new Error('[Agent 编排] 当前适配器不支持自动重试切换')
+      }
+      await this.adapter.setAutoRetry(sessionId, input.autoRetryEnabled)
+    }
+  }
+
+  /**
    * 更新活跃 runtime 的队列投递模式。
    *
    * Pi RPC 支持 steering / follow-up 队列模式；不支持该能力的 runtime 会明确报错。

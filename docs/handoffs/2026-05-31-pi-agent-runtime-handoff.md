@@ -2716,6 +2716,33 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "thinking level"`：1 pass / 0 fail。
   - `bun run --filter='@proma/electron' typecheck`：通过。
 
+## 2026-06-03 Phase J81 Pi runtime auto controls switching parity
+
+- 背景：
+  - J62 / J63 已经让 Pi runtime 在新 query 启动时默认同步 `set_auto_compaction` / `set_auto_retry`。
+  - J67 之后 Pi runtime 状态弹窗已能展示自动压缩与自动重试状态，但用户运行中不能直接切换。
+  - 为了让 Pi 的运行中控制体验继续贴近 Claude SDK 侧的动态控制能力，本阶段补齐“状态可见后可控制”。
+- 实现：
+  - `@proma/shared`：
+    - 新增 `UpdateRuntimeAutoControlsInput`。
+    - 新增 IPC 通道 `agent:update-runtime-auto-controls`。
+  - Main / Preload：
+    - `AgentOrchestrator.updateRuntimeAutoControls()` 校验会话活跃，并按字段转发到 `setAutoCompaction()` / `setAutoRetry()`。
+    - `agent-service`、`ipc.ts`、`preload/index.ts` 接入 `updateRuntimeAutoControls()`。
+  - Renderer：
+    - `PiRuntimeStatusPopover` 在状态弹窗中新增“自动控制”区域。
+    - 支持运行中切换“自动压缩”和“自动重试”，成功后重新读取 runtime state，失败时在弹窗展示错误。
+- 版本：
+  - `@proma/shared` patch bump 到 `0.1.63`。
+  - `@proma/electron` patch bump 到 `0.10.117`。
+- 当前边界：
+  - 只作用于活跃 Pi runtime，不修改 Proma 全局默认策略。
+  - Claude SDK 路径不展示该 Pi runtime 控制；不支持对应 adapter capability 时由编排层返回明确错误。
+  - 如果 Pi RPC 未返回 `autoRetryEnabled` 原生字段，Proma 仍使用 adapter 派生状态；未知状态在 UI 上会表现为关闭态，切换后会以 Proma 发出的设置为准。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "auto controls are changed"`：红灯确认 `updateRuntimeAutoControls` 缺失；实现后 1 pass / 0 fail。
+  - `bun run --filter='@proma/electron' typecheck`：通过。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

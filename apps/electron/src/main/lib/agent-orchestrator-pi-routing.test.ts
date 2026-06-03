@@ -3139,6 +3139,92 @@ describe('AgentOrchestrator pi routing', () => {
     expect(result.abortRetryCalls).toEqual([{ sessionId: 'session-abort-runtime-retry' }])
   })
 
+  test('Given active session When auto controls are changed Then delegates to adapter auto control commands', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+
+      let releaseAgentEnd
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+
+      class FakeAdapter {
+        autoCompactionCalls = []
+        autoRetryCalls = []
+
+        async *query(input) {
+          await waitForRelease
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        async setAutoCompaction(sessionId, enabled) {
+          this.autoCompactionCalls.push({ sessionId, enabled })
+        }
+
+        async setAutoRetry(sessionId, enabled) {
+          this.autoRetryCalls.push({ sessionId, enabled })
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const adapter = new FakeAdapter()
+      const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
+      const runPromise = orchestrator.sendMessage({
+        sessionId: 'session-set-auto-controls',
+        userMessage: 'run task',
+        channelId: 'missing-channel',
+        modelId: 'model',
+        startedAt: 994,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await orchestrator.updateRuntimeAutoControls('session-set-auto-controls', {
+        autoCompactionEnabled: false,
+        autoRetryEnabled: true,
+      })
+      releaseAgentEnd()
+      await runPromise
+
+      console.log(JSON.stringify({
+        autoCompactionCalls: adapter.autoCompactionCalls,
+        autoRetryCalls: adapter.autoRetryCalls,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('autoCompactionCalls'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      autoCompactionCalls?: Array<{ sessionId?: string; enabled?: boolean }>
+      autoRetryCalls?: Array<{ sessionId?: string; enabled?: boolean }>
+    }
+
+    expect(result.autoCompactionCalls).toEqual([{ sessionId: 'session-set-auto-controls', enabled: false }])
+    expect(result.autoRetryCalls).toEqual([{ sessionId: 'session-set-auto-controls', enabled: true }])
+  })
+
   test('Given active session When queue modes are changed Then delegates to adapter queue mode commands', () => {
     const output = runOrchestratorScript(`
       import { mock } from 'bun:test'

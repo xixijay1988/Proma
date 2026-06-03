@@ -27,6 +27,7 @@ import type {
   AgentQueueMessageInput,
   StopTaskInput,
   AbortRuntimeRetryInput,
+  UpdateRuntimeAutoControlsInput,
   UpdateRuntimeQueueModesInput,
   UpdateRuntimeThinkingLevelInput,
   PromaPermissionMode,
@@ -527,6 +528,16 @@ export async function stopAgentTask(input: StopTaskInput): Promise<void> {
  */
 export async function abortAgentRuntimeRetry(input: AbortRuntimeRetryInput): Promise<void> {
   await getSessionOperationOrchestrator(input.sessionId).abortRuntimeRetry(input.sessionId)
+}
+
+/**
+ * 更新活跃 runtime 的自动控制。
+ */
+export async function updateAgentRuntimeAutoControls(input: UpdateRuntimeAutoControlsInput): Promise<void> {
+  await getSessionOperationOrchestrator(input.sessionId).updateRuntimeAutoControls(input.sessionId, {
+    autoCompactionEnabled: input.autoCompactionEnabled,
+    autoRetryEnabled: input.autoRetryEnabled,
+  })
 }
 
 /**
