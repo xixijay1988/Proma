@@ -2384,6 +2384,37 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "Given Pi retry lifecycle is active"`：红灯确认 runtime state 缺少 retry 字段，实现后 1 pass / 0 fail。
   - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "runtime state|auto retry|retry is aborted"`：6 pass / 0 fail。
 
+## 2026-06-03 Phase J68 Pi runtime status popover
+
+- 背景：
+  - J61-J67 已经逐步把 Pi RPC `get_state` / `get_session_stats` / `get_commands`、retry、compaction 等能力接到主进程和 shared 类型。
+  - Renderer 侧此前没有调用 `window.electronAPI.getRuntimeState()` 的入口，导致用户无法在 Proma UI 中直接验证当前 Pi runtime 的 provider/model、retry/compaction、原生 session、MCP/Skills commands。
+  - J68 目标是补一个轻量可观察性入口，帮助 Pi runtime 更接近 Claude SDK 集成的可理解、可诊断体验。
+- 实现：
+  - 新增 `pi-runtime-status-ui.ts`：
+    - 将 `AgentRuntimeStateResult` 格式化为用户可读状态行。
+    - 将 runtime commands 按 `extension` / `skill` / `prompt` / `unknown` 分组。
+  - 新增 `PiRuntimeStatusPopover.tsx`：
+    - 仅在 Pi 会话工具栏出现。
+    - 打开/刷新时调用 `window.electronAPI.getRuntimeState({ sessionId })`。
+    - 展示运行状态、自动重试、自动压缩、模型、provider、thinking、queue、原生 session、消息/统计/tokens/context/cost、session 文件。
+    - 展示 Pi runtime 当前注册的 Extensions / Skills / Prompts / Other commands，长列表每组先显示前 8 个。
+    - 会话未运行时给出明确提示：Pi runtime 实时状态仅运行中可读取。
+  - `AgentView`：
+    - Pi 工具栏新增 Activity 图标入口，放在 Pi clone 与 Pi native session 切换之间。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.104`。
+- 当前边界：
+  - J68 不做后台轮询，只在用户打开或手动刷新时读取 active runtime state。
+  - J68 不把 runtime state 持久化到会话 JSONL；会话结束后仍以历史消息与 Pi native session 文件为准。
+  - Popover 当前偏诊断，不替代后续更完整的 runtime inspector / MCP-Skills 边界管理页面。
+- 已运行：
+  - `bun test apps/electron/src/renderer/components/agent/pi-runtime-status-ui.test.ts`：红灯确认 helper 不存在，实现后 2 pass / 0 fail。
+  - `bun test apps/electron/src/renderer/components/agent/pi-runtime-status-ui.test.ts apps/electron/src/renderer/components/agent/pi-native-session-ui.test.ts apps/electron/src/renderer/components/agent/ProcessBlockGroup.test.ts apps/electron/src/renderer/hooks/useGlobalAgentListeners.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts`：84 pass / 0 fail。
+  - `bun run typecheck`：4 个 workspace 包 typecheck 均 exit 0。
+  - `bun run electron:build`：Electron build exit 0；保留既有 Vite large chunk warning。
+  - `git diff --check`：无 whitespace 问题。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

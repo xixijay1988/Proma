@@ -26,6 +26,7 @@ import { PermissionModeSelector } from './PermissionModeSelector'
 import { AskUserBanner } from './AskUserBanner'
 import { ExitPlanModeBanner } from './ExitPlanModeBanner'
 import { PlanModeDashedBorder } from './PlanModeDashedBorder'
+import { PiRuntimeStatusPopover } from './PiRuntimeStatusPopover'
 import { ModelSelector } from '@/components/chat/ModelSelector'
 import { AttachmentPreviewItem } from '@/components/chat/AttachmentPreviewItem'
 import { QuotedSelectionChip } from '@/components/diff/QuotedSelectionChip'
@@ -2221,6 +2222,15 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
             <p>克隆当前 Pi 会话分支</p>
           </TooltipContent>
         </Tooltip>
+      ),
+    } satisfies ToolbarItem] : []),
+    ...(isPiAgentEngine ? [{
+      key: 'pi-runtime-status',
+      node: (
+        <PiRuntimeStatusPopover
+          sessionId={sessionId}
+          streaming={streaming}
+        />
       ),
     } satisfies ToolbarItem] : []),
     ...(isPiAgentEngine ? [{
