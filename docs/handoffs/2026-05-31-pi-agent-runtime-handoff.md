@@ -2176,6 +2176,33 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun run typecheck`：通过。
   - `bun run electron:build`：通过，仅既有 Vite chunk-size warning。
 
+## 2026-06-03 Phase J61 Pi runtime command diagnostics
+
+- 背景：
+  - J59/J60 已能读取 Pi runtime state 与 session stats，但还不能证明当前 Pi runtime 实际加载了哪些 extension、prompt 和 skill。
+  - Pi RPC 原生 `get_commands` 会汇总 extension commands、prompt templates 和 skills。
+  - 这可以支撑后续 UI 展示"当前确实是 Pi runtime 且加载了哪些能力"，也能帮助排查 Skill / MCP 是否进入 Pi 原生命令边界。
+- 实现：
+  - `AgentRuntimeState` 新增可选 `commands` 字段。
+  - 新增 `AgentRuntimeCommand` 结构：
+    - `name`
+    - `description`
+    - `source`: `extension` / `prompt` / `skill` / `unknown`
+    - `sourceInfo`
+  - `PiAgentAdapter.getRuntimeState()` 在 `get_state` 与 `get_session_stats` 后继续发送 `{ type: 'get_commands' }`。
+  - Adapter 会过滤空名称命令，并规范化未知 source 为 `unknown`。
+  - Orchestrator runtime state 路由测试覆盖 `commands` 透传，避免上层字段收窄。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.97`。
+  - `@proma/shared` patch bump 到 `0.1.52`。
+- 当前边界：
+  - 该能力仍要求 Pi runtime 活跃；目前不会读取已结束会话的历史命令快照。
+  - J61 只提供诊断数据，不新增 renderer UI。
+  - Claude SDK 没有同名 RPC，但 Proma 可把该字段作为 provider optional diagnostics 使用。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts --test-name-pattern "runtime state" --timeout 30000`：红灯确认未发送 `get_commands`，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --timeout 30000`：53 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

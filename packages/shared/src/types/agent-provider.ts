@@ -91,6 +91,7 @@ export interface AgentRuntimeState {
   messageCount?: number
   pendingMessageCount?: number
   stats?: AgentRuntimeSessionStats
+  commands?: AgentRuntimeCommand[]
 }
 
 /** 活跃 runtime 的会话统计信息（Pi RPC get_session_stats） */
@@ -112,6 +113,18 @@ export interface AgentRuntimeSessionStats {
     tokens?: number | null
     maxTokens?: number
     percent?: number | null
+  }
+}
+
+/** 活跃 runtime 当前注册的命令、Prompt 和 Skill（Pi RPC get_commands） */
+export interface AgentRuntimeCommand {
+  name: string
+  description?: string
+  source: 'extension' | 'prompt' | 'skill' | 'unknown'
+  sourceInfo?: {
+    name?: string
+    path?: string
+    [key: string]: unknown
   }
 }
 

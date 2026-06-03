@@ -3,6 +3,7 @@ import type {
   AgentQueryInput,
   SDKContentBlock,
   SDKMessage,
+  AgentRuntimeCommand,
   AgentRuntimeExtensionUiRequest,
   AgentRuntimeExtensionUiResponse,
   AgentRuntimeCloneResult,
@@ -46,6 +47,7 @@ const PI_RUNTIME_COMMANDS = new Set([
   'compact',
   'fork',
   'get_fork_messages',
+  'get_commands',
   'get_messages',
   'get_session_stats',
   'get_state',
@@ -572,6 +574,37 @@ function parseRuntimeSessionStatsData(data: unknown): AgentRuntimeSessionStats {
   }
 }
 
+function normalizeRuntimeCommandSource(source: string | undefined): AgentRuntimeCommand['source'] {
+  if (source === 'extension' || source === 'prompt' || source === 'skill') {
+    return source
+  }
+  return 'unknown'
+}
+
+function parseRuntimeCommandsData(data: unknown): AgentRuntimeCommand[] {
+  const dataRecord = asRecord(data)
+  const commands = Array.isArray(dataRecord?.commands) ? dataRecord.commands : []
+
+  return commands.flatMap((command): AgentRuntimeCommand[] => {
+    const commandRecord = asRecord(command)
+    if (!commandRecord) return []
+
+    const name = getString(commandRecord, 'name')?.trim()
+    if (!name) return []
+
+    const description = getString(commandRecord, 'description')
+    const source = normalizeRuntimeCommandSource(getString(commandRecord, 'source') ?? undefined)
+    const sourceInfoRecord = asRecord(commandRecord.sourceInfo)
+
+    return [{
+      name,
+      ...(description ? { description } : {}),
+      source,
+      ...(sourceInfoRecord ? { sourceInfo: sourceInfoRecord } : {}),
+    }]
+  })
+}
+
 function createPiCompactMessages(input: {
   sessionId: string
   data: unknown
@@ -1042,9 +1075,15 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       { type: 'get_session_stats' },
       'proma-get-session-stats',
     )
+    const commandsResponse = await this.sendRuntimeCommand(
+      sessionId,
+      { type: 'get_commands' },
+      'proma-get-commands',
+    )
     return {
       ...parseRuntimeStateData(stateResponse.data),
       stats: parseRuntimeSessionStatsData(statsResponse.data),
+      commands: parseRuntimeCommandsData(commandsResponse.data),
     }
   }
 

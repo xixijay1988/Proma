@@ -874,6 +874,14 @@ describe('AgentOrchestrator pi routing', () => {
               tokens: { input: 300, output: 120, total: 420 },
               costUsd: 0.045,
             },
+            commands: [
+              {
+                name: 'proma_mcp_status',
+                description: 'Inspect configured MCP servers',
+                source: 'extension',
+                sourceInfo: { name: 'proma-mcp-bridge' },
+              },
+            ],
           }
         }
 
@@ -915,6 +923,7 @@ describe('AgentOrchestrator pi routing', () => {
         nativeSessionId?: string
         pendingMessageCount?: number
         stats?: { totalMessages?: number; tokens?: { total?: number }; costUsd?: number }
+        commands?: Array<{ name?: string; source?: string; sourceInfo?: { name?: string } }>
       }
       stateCalls?: string[]
     }
@@ -930,6 +939,14 @@ describe('AgentOrchestrator pi routing', () => {
         tokens: { input: 300, output: 120, total: 420 },
         costUsd: 0.045,
       },
+      commands: [
+        {
+          name: 'proma_mcp_status',
+          description: 'Inspect configured MCP servers',
+          source: 'extension',
+          sourceInfo: { name: 'proma-mcp-bridge' },
+        },
+      ],
     })
   })
 

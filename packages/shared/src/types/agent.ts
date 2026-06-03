@@ -1096,6 +1096,17 @@ export interface AgentRuntimeStateResult {
       percent?: number | null
     }
   }
+  /** Runtime 当前注册的命令、Prompt 和 Skill */
+  commands?: Array<{
+    name: string
+    description?: string
+    source: 'extension' | 'prompt' | 'skill' | 'unknown'
+    sourceInfo?: {
+      name?: string
+      path?: string
+      [key: string]: unknown
+    }
+  }>
 }
 
 // ===== Agent 流式事件载荷 =====

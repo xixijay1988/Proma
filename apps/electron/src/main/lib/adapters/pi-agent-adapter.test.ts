@@ -1058,6 +1058,41 @@ describe('PiAgentAdapter', () => {
                 },
               }))
             }
+            if (command.type === 'get_commands') {
+              queueMicrotask(() => pushResponse({
+                type: 'response',
+                id: command.id,
+                command: 'get_commands',
+                success: true,
+                data: {
+                  commands: [
+                    {
+                      name: 'proma_mcp_status',
+                      description: 'Inspect configured MCP servers',
+                      source: 'extension',
+                      sourceInfo: { name: 'proma-mcp-bridge', path: '/tmp/proma-mcp.js' },
+                    },
+                    {
+                      name: 'plan',
+                      description: 'Create a plan',
+                      source: 'prompt',
+                      sourceInfo: { name: 'default-prompts' },
+                    },
+                    {
+                      name: 'skill:using-superpowers',
+                      description: 'Use installed skills',
+                      source: 'skill',
+                      sourceInfo: { name: 'using-superpowers', path: '/tmp/skills/using-superpowers' },
+                    },
+                    {
+                      name: '',
+                      source: 'skill',
+                      sourceInfo: { name: 'invalid' },
+                    },
+                  ],
+                },
+              }))
+            }
           },
           abort: () => {},
           kill: () => {},
@@ -1075,6 +1110,11 @@ describe('PiAgentAdapter', () => {
               new Promise((resolve) => setTimeout(() => resolve(null), 20)),
             ])
             if (maybeStats) yield maybeStats
+            const maybeCommands = await Promise.race([
+              waitForResponse(),
+              new Promise((resolve) => setTimeout(() => resolve(null), 20)),
+            ])
+            if (maybeCommands) yield maybeCommands
             await waitForRelease
             yield { type: 'agent_end', messages: [] }
           })(),
@@ -1142,14 +1182,21 @@ describe('PiAgentAdapter', () => {
             percent?: number
           }
         }
+        commands?: Array<{
+          name?: string
+          description?: string
+          source?: string
+          sourceInfo?: { name?: string; path?: string }
+        }>
       }
       resultType?: string
       resultSubtype?: string
     }
 
-    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'get_state', 'get_session_stats'])
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'get_state', 'get_session_stats', 'get_commands'])
     expect(result.sentCommands?.[1]?.id).toStartWith('proma-get-state-session-pi-runtime-state-')
     expect(result.sentCommands?.[2]?.id).toStartWith('proma-get-session-stats-session-pi-runtime-state-')
+    expect(result.sentCommands?.[3]?.id).toStartWith('proma-get-commands-session-pi-runtime-state-')
     expect(result.runtimeState).toEqual({
       provider: 'deepseek',
       modelId: 'deepseek-v4-flash',
@@ -1185,6 +1232,26 @@ describe('PiAgentAdapter', () => {
           percent: 0.685,
         },
       },
+      commands: [
+        {
+          name: 'proma_mcp_status',
+          description: 'Inspect configured MCP servers',
+          source: 'extension',
+          sourceInfo: { name: 'proma-mcp-bridge', path: '/tmp/proma-mcp.js' },
+        },
+        {
+          name: 'plan',
+          description: 'Create a plan',
+          source: 'prompt',
+          sourceInfo: { name: 'default-prompts' },
+        },
+        {
+          name: 'skill:using-superpowers',
+          description: 'Use installed skills',
+          source: 'skill',
+          sourceInfo: { name: 'using-superpowers', path: '/tmp/skills/using-superpowers' },
+        },
+      ],
     })
     expect(result.resultType).toBe('result')
     expect(result.resultSubtype).toBe('success')
