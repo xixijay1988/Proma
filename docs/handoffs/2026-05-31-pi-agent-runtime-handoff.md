@@ -2890,6 +2890,30 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
 - 已运行：
   - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "Pi MCP permission request"`：红灯确认原始 `mcp__...` 展示名，实施后 1 pass / 0 fail。
 
+## 2026-06-03 Phase J88 Pi MCP permission risk hint wording
+
+- 背景：
+  - Pi MCP bridge 已发布 remote tool risk hints，并且 permission mapping 已使用这些 hint 决定 read / write。
+  - 需要审批的 Pi MCP 请求仍只展示 `调用 MCP 工具: server / tool`，用户看不到风险判断依据。
+- 实现：
+  - `pi-permission-extension.ts`：
+    - 新增 `formatPermissionDescription(toolName, input, decision)`。
+    - 在 confirm payload 的 `description` 中追加 MCP 风险提示：
+      - read hint：`风险提示: MCP 工具看起来是只读查询。`
+      - write hint：`风险提示: MCP 工具可能修改远端状态。`
+      - unknown MCP + normal danger：提示风险未知，请确认远端工具行为。
+    - 不改变 `mapToolPermission()` 的 allow/ask 决策，不影响 allow-all 直接放行。
+  - 测试：
+    - `pi-permission-mapping.test.ts` 验证生成的 Pi permission extension source 会把 risk hint 写入 confirm description。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.124`。
+- 当前边界：
+  - 这是审批说明 parity，不改变 MCP 调用或权限决策。
+  - 后续可把 risk hint 进一步结构化进 `PermissionRequest`，用于 Renderer 的 badge / color / tooltip。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts -t "write risk hint"`：红灯确认缺少 risk hint 描述，实施后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts`：24 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

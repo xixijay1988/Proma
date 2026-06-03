@@ -184,6 +184,18 @@ describe('pi permission mapping', () => {
     expect(source).toContain("if (mcpRiskHint?.risk === 'read') return { behavior: 'allow', dangerLevel: 'safe' }")
   })
 
+  test('Given permission extension source When MCP write risk hint asks Then confirm description includes risk wording', () => {
+    const source = buildPiPermissionExtensionSourceForTest({
+      piMode: 'ask',
+      allowedDirectories: ['/tmp/workspace'],
+    })
+
+    expect(source).toContain('function formatPermissionDescription(toolName, input, decision)')
+    expect(source).toContain("if (mcpRiskHint?.risk === 'read') return baseDescription + '\\n风险提示: MCP 工具看起来是只读查询。'")
+    expect(source).toContain("if (mcpRiskHint?.risk === 'write') return baseDescription + '\\n风险提示: MCP 工具可能修改远端状态。'")
+    expect(source).toContain('description: formatPermissionDescription(toolName, input, decision)')
+  })
+
   test('Given permission extension source When MCP call_tool fallback has toolName Then risk hint can resolve the remote tool', () => {
     const source = buildPiPermissionExtensionSourceForTest({
       piMode: 'ask',

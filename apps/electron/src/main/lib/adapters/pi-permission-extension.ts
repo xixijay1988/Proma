@@ -135,6 +135,16 @@ function formatDescription(toolName, input) {
   return '使用 Pi 工具: ' + toolName
 }
 
+function formatPermissionDescription(toolName, input, decision) {
+  const baseDescription = formatDescription(toolName, input)
+  const rawTool = String(toolName || '').trim().toLowerCase()
+  const mcpRiskHint = getGlobalMcpToolRiskHint(rawTool, input)
+  if (mcpRiskHint?.risk === 'read') return baseDescription + '\\n风险提示: MCP 工具看起来是只读查询。'
+  if (mcpRiskHint?.risk === 'write') return baseDescription + '\\n风险提示: MCP 工具可能修改远端状态。'
+  if (rawTool.startsWith('mcp__') && decision?.dangerLevel === 'normal') return baseDescription + '\\n风险提示: MCP 工具风险未知，请确认远端工具行为。'
+  return baseDescription
+}
+
 export default function (pi) {
   pi.registerCommand('proma-permission-mode', {
     description: 'Internal Proma command: update Pi permission mode for this runtime.',
@@ -171,7 +181,7 @@ export default function (pi) {
       promaPermissionRequest: true,
       toolName,
       toolInput: input,
-      description: formatDescription(toolName, input),
+      description: formatPermissionDescription(toolName, input, decision),
       command: typeof input.command === 'string' ? input.command : undefined,
       dangerLevel: decision.dangerLevel,
       piPermissionMode: currentPermissionMode,
