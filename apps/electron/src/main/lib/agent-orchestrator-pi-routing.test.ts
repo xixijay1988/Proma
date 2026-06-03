@@ -1329,6 +1329,137 @@ describe('AgentOrchestrator pi routing', () => {
     expect(result.hasTransient).toBe(false)
   })
 
+  test('Given pi adapter emits Proma compaction events When run completes Then forwards events and persists only boundary', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+      const { getAgentSessionSDKMessages } = await import('./agent-session-manager.ts')
+
+      class FakePiAdapter {
+        async *query(input) {
+          yield {
+            type: 'system',
+            subtype: 'pi_runtime_event',
+            session_id: input.sessionId,
+            _promaTransient: true,
+            _promaEvent: {
+              type: 'compaction',
+              status: 'starting',
+              reason: 'threshold',
+            },
+          }
+          yield {
+            type: 'system',
+            subtype: 'compact_boundary',
+            summary: 'Pi 自动压缩摘要',
+            tokens_before: 4096,
+            session_id: input.sessionId,
+          }
+          yield {
+            type: 'system',
+            subtype: 'pi_runtime_event',
+            session_id: input.sessionId,
+            _promaTransient: true,
+            _promaEvent: {
+              type: 'compaction',
+              status: 'cleared',
+              reason: 'threshold',
+            },
+          }
+          yield {
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: 'pi compacted and continued' }] },
+            parent_tool_use_id: null,
+            session_id: input.sessionId,
+          }
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const eventBus = new AgentEventBus()
+      const forwardedCompactionEvents = []
+      const forwardedSdkSubtypes = []
+      eventBus.use((_sessionId, payload, next) => {
+        if (payload.kind === 'proma_event' && payload.event.type === 'compaction') {
+          forwardedCompactionEvents.push(payload.event)
+        }
+        if (payload.kind === 'sdk_message') {
+          forwardedSdkSubtypes.push(payload.message.subtype ?? payload.message.type)
+        }
+        next()
+      })
+
+      const orchestrator = new AgentOrchestrator(new FakePiAdapter(), eventBus, 'pi')
+
+      await orchestrator.sendMessage({
+        sessionId: 'session-pi-compaction-event-forward',
+        userMessage: 'hello',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        startedAt: 458,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      const messages = getAgentSessionSDKMessages('session-pi-compaction-event-forward')
+
+      console.log(JSON.stringify({
+        forwardedCompactionEvents,
+        forwardedSdkSubtypes,
+        persistedSystemSubtypes: messages
+          .filter((message) => message.type === 'system')
+          .map((message) => message.subtype),
+        persistedCount: messages.length,
+        hasRuntimeEventSystemMessage: messages.some((message) => message.subtype === 'pi_runtime_event'),
+        hasTransient: messages.some((message) => message._promaTransient === true),
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('forwardedCompactionEvents'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      forwardedCompactionEvents?: Array<{ type?: string; status?: string; reason?: string }>
+      forwardedSdkSubtypes?: string[]
+      persistedSystemSubtypes?: string[]
+      persistedCount?: number
+      hasRuntimeEventSystemMessage?: boolean
+      hasTransient?: boolean
+    }
+
+    expect(result.forwardedCompactionEvents).toEqual([
+      { type: 'compaction', status: 'starting', reason: 'threshold' },
+      { type: 'compaction', status: 'cleared', reason: 'threshold' },
+    ])
+    expect(result.forwardedSdkSubtypes).toEqual(['compact_boundary', 'assistant', 'success'])
+    expect(result.persistedSystemSubtypes).toEqual(['compact_boundary'])
+    expect(result.persistedCount).toBe(4)
+    expect(result.hasRuntimeEventSystemMessage).toBe(false)
+    expect(result.hasTransient).toBe(false)
+  })
+
   test('Given pi extension confirm request When user allows permission Then returns confirmed response', () => {
     const output = runOrchestratorScript(`
       import { mock } from 'bun:test'

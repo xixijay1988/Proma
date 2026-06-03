@@ -1193,6 +1193,11 @@ export class AgentOrchestrator {
 
         if ((msg.type === 'assistant' || msg.type === 'result') && msgRecord._promaTransient !== true) {
           accumulatedMessages.push(msg)
+        } else if (msg.type === 'system') {
+          const sysMsg = msg as import('@proma/shared').SDKSystemMessage
+          if (sysMsg.subtype === 'compact_boundary' || sysMsg.subtype === 'permission_denied') {
+            accumulatedMessages.push(msg)
+          }
         }
         if (msg.type === 'result' && typeof msg.subtype === 'string') {
           capturedResultSubtype = msg.subtype

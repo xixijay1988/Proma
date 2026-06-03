@@ -2325,6 +2325,38 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun run electron:build`：Electron build exit 0；保留既有 Vite large chunk warning。
   - `git diff --check`：无 whitespace 问题。
 
+## 2026-06-03 Phase J66 Pi compaction lifecycle stream bridge
+
+- 背景：
+  - Pi RPC 原生会在手动/自动上下文压缩时发出 `compaction_start` / `compaction_end`。
+  - Proma Claude SDK 路径已有 `compacting` / `compact_complete` UI 状态，以及持久化 `compact_boundary` 历史分界线。
+  - J66 将 Pi compaction lifecycle 接入同一条 Proma 状态流，避免 Pi 自动压缩时 UI 静默无状态、刷新后缺少压缩分界。
+- 实现：
+  - `@proma/shared`：
+    - `PromaEvent` 新增 `{ type: "compaction", status: "starting" | "cleared", reason?: string }`。
+  - `PiAgentAdapter`：
+    - `compaction_start` 转为瞬态 `_promaEvent`：`compaction starting`。
+    - `compaction_end` 转为瞬态 `_promaEvent`：`compaction cleared`。
+    - `compaction_end` 若未 aborted 且包含 `result`，额外产出 `system:compact_boundary`，复用已有历史渲染。
+  - `AgentOrchestrator.runPiSession()`：
+    - 已有 `_promaEvent` 转发链路复用到 compaction。
+    - Pi 专属主循环现在也会累积 `system:compact_boundary` / `permission_denied`，与 Claude 通用分支持久化规则一致。
+  - Renderer：
+    - `payloadToLegacyEvents()` 导出并测试。
+    - Proma compaction event 映射为现有 `compacting` / `compact_complete`，复用 `CompactingIndicator`。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.102`。
+  - `@proma/shared` patch bump 到 `0.1.56`。
+- 当前边界：
+  - J66 不新增独立 Pi compaction UI；只复用已有压缩状态和历史分界线。
+  - 如果 Pi `compaction_end` 没有 `result` 或 `aborted=true`，只清理 UI 压缩状态，不写入假的 `compact_boundary`。
+  - Pi runtime state 的 `isCompacting` 仍来自 `get_state` 查询；流式 UI 状态由 lifecycle event 即时驱动。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "Given Pi compaction lifecycle events"`：红灯确认未产出 compaction event，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "Given pi adapter emits Proma compaction events"`：红灯确认 Pi 分支未持久化 `compact_boundary`，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/renderer/hooks/useGlobalAgentListeners.test.ts`：1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-process.test.ts apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/adapters/pi-event-converter.test.ts apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts apps/electron/src/renderer/hooks/useGlobalAgentListeners.test.ts`：100 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

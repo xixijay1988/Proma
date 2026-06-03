@@ -116,7 +116,7 @@ function inferContextWindow(model?: string): number | undefined {
   return 200_000
 }
 
-function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
+export function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
   if (payload.kind === 'proma_event') {
     const evt = payload.event
     switch (evt.type) {
@@ -154,6 +154,8 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
         }
         return events
       }
+      case 'compaction':
+        return [evt.status === 'starting' ? { type: 'compacting' } : { type: 'compact_complete' }]
       default:
         return []
     }

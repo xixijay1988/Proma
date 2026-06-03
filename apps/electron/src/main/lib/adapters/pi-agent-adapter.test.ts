@@ -1274,6 +1274,97 @@ describe('PiAgentAdapter', () => {
     expect(result.resultSubtype).toBe('success')
   })
 
+  test('Given Pi compaction lifecycle events When query runs Then yields Proma compaction events and boundary', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: () => {},
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield {
+              type: 'compaction_start',
+              reason: 'threshold',
+            }
+            yield {
+              type: 'compaction_end',
+              reason: 'threshold',
+              aborted: false,
+              willRetry: false,
+              result: {
+                summary: 'Pi 自动压缩摘要',
+                firstKeptEntryId: 'entry-2',
+                tokensBefore: 4096,
+              },
+            }
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const messages = []
+
+      for await (const message of adapter.query({
+        sessionId: 'session-pi-compaction-events',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })) {
+        messages.push(message)
+      }
+
+      const compactionEvents = messages
+        .map((message) => message._promaEvent ?? null)
+        .filter((event) => event?.type === 'compaction')
+      const systemMessages = messages.filter((message) => message.type === 'system')
+
+      console.log(JSON.stringify({
+        compactionEvents,
+        transientFlags: messages
+          .filter((message) => message._promaEvent)
+          .map((message) => message._promaTransient === true),
+        systemMessages,
+        resultSubtype: messages.at(-1)?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('compactionEvents'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      compactionEvents?: Array<{ type?: string; status?: string; reason?: string }>
+      transientFlags?: boolean[]
+      systemMessages?: Array<{ type?: string; subtype?: string; summary?: string; first_kept_entry_id?: string; tokens_before?: number }>
+      resultSubtype?: string
+    }
+
+    expect(result.compactionEvents).toEqual([
+      { type: 'compaction', status: 'starting', reason: 'threshold' },
+      { type: 'compaction', status: 'cleared', reason: 'threshold' },
+    ])
+    expect(result.transientFlags).toEqual([true, true])
+    expect(result.systemMessages?.map((message) => `${message.type}:${message.subtype}`)).toEqual([
+      'system:pi_runtime_event',
+      'system:compact_boundary',
+      'system:pi_runtime_event',
+    ])
+    expect(result.systemMessages?.[1]).toMatchObject({
+      subtype: 'compact_boundary',
+      summary: 'Pi 自动压缩摘要',
+      first_kept_entry_id: 'entry-2',
+      tokens_before: 4096,
+    })
+    expect(result.resultSubtype).toBe('success')
+  })
+
   test('Given active Pi query When runtime messages are requested Then sends get_messages command', () => {
     const output = runPiAdapterScript(`
       import { mock } from 'bun:test'

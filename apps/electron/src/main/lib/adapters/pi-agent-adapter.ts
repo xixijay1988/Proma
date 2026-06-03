@@ -248,6 +248,41 @@ function createPiAutoRetryMessages(input: AgentQueryInput, event: PiRpcEvent): S
   return []
 }
 
+function createPiCompactionMessages(input: AgentQueryInput, event: PiRpcEvent): SDKMessage[] {
+  if (event.type === 'compaction_start') {
+    const reason = getString(event, 'reason') ?? undefined
+
+    return [createPromaEventMessage(input, {
+      type: 'compaction',
+      status: 'starting',
+      ...(reason ? { reason } : {}),
+    })]
+  }
+
+  if (event.type === 'compaction_end') {
+    const reason = getString(event, 'reason') ?? undefined
+    const messages: SDKMessage[] = []
+    const resultRecord = asRecord(event.result)
+
+    if (event.aborted !== true && resultRecord) {
+      messages.push(createPiCompactBoundaryMessage({
+        sessionId: input.sessionId,
+        data: resultRecord,
+      }))
+    }
+
+    messages.push(createPromaEventMessage(input, {
+      type: 'compaction',
+      status: 'cleared',
+      ...(reason ? { reason } : {}),
+    }))
+
+    return messages
+  }
+
+  return []
+}
+
 function createSuccessResultMessage(input: AgentQueryInput): SDKMessage {
   return {
     type: 'result',
@@ -684,27 +719,34 @@ function createPiCompactMessages(input: {
   sessionId: string
   data: unknown
 }): SDKMessage[] {
-  const dataRecord = asRecord(input.data) ?? {}
-  const summary = getString(dataRecord, 'summary') ?? 'Pi 已完成上下文压缩'
-  const firstKeptEntryId = getString(dataRecord, 'firstKeptEntryId')
-  const tokensBeforeValue = dataRecord.tokensBefore
-  const tokensBefore = typeof tokensBeforeValue === 'number' ? tokensBeforeValue : undefined
-
   return [
     {
       type: 'system',
       subtype: 'compacting',
       session_id: input.sessionId,
     },
-    {
-      type: 'system',
-      subtype: 'compact_boundary',
-      summary,
-      ...(firstKeptEntryId ? { first_kept_entry_id: firstKeptEntryId } : {}),
-      ...(tokensBefore != null ? { tokens_before: tokensBefore } : {}),
-      session_id: input.sessionId,
-    },
+    createPiCompactBoundaryMessage(input),
   ] as unknown as SDKMessage[]
+}
+
+function createPiCompactBoundaryMessage(input: {
+  sessionId: string
+  data: unknown
+}): SDKMessage {
+  const dataRecord = asRecord(input.data) ?? {}
+  const summary = getString(dataRecord, 'summary') ?? 'Pi 已完成上下文压缩'
+  const firstKeptEntryId = getString(dataRecord, 'firstKeptEntryId')
+  const tokensBeforeValue = dataRecord.tokensBefore
+  const tokensBefore = typeof tokensBeforeValue === 'number' ? tokensBeforeValue : undefined
+
+  return {
+    type: 'system',
+    subtype: 'compact_boundary',
+    summary,
+    ...(firstKeptEntryId ? { first_kept_entry_id: firstKeptEntryId } : {}),
+    ...(tokensBefore != null ? { tokens_before: tokensBefore } : {}),
+    session_id: input.sessionId,
+  } as unknown as SDKMessage
 }
 
 function normalizePiThinkingLevel(level: string): string {
@@ -739,6 +781,9 @@ function createExtensionUiResponse(
 function convertPiRpcEvent(input: AgentQueryInput, event: PiRpcEvent): SDKMessage[] {
   const retryMessages = createPiAutoRetryMessages(input, event)
   if (retryMessages.length > 0) return retryMessages
+
+  const compactionMessages = createPiCompactionMessages(input, event)
+  if (compactionMessages.length > 0) return compactionMessages
 
   if (event.type === 'message_update') {
     const assistantMessageEvent = asRecord(event.assistantMessageEvent)
