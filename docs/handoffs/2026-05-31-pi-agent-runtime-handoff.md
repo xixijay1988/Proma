@@ -2798,6 +2798,27 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/adapters/pi-mcp-extension.test.ts -t "remote tool preserves structured MCP results"`：红灯确认缺少 `bridgeType`，实现后 3 pass / 0 fail。
   - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "Pi MCP tool result"`：通过。
 
+## 2026-06-03 Phase J84 Pi MCP fallback call_tool provenance metadata
+
+- 背景：
+  - J83 已经让逐工具 MCP bridge 结果带上 `bridgeType: "proma-pi-mcp-remote-tool"`。
+  - 服务器级兜底工具 `mcp__<server>__call_tool` 仍然只返回 `server` / `toolName`，当逐工具枚举失败或用户手动选择兜底调用时，UI、权限和诊断缺少稳定 provenance。
+- 实现：
+  - `pi-mcp-extension.ts`：
+    - 服务器级 `call_tool` 成功结果的 `details` 增加 `bridgeType: "proma-pi-mcp-call-tool"` 与 `nativeToolName: server.callToolToolName`。
+    - 服务器级 `call_tool` 错误结果的 `details` 同样增加这两个字段。
+    - 不改变调用参数、远端 MCP tool name、内容归一化或 structuredContent。
+  - 测试：
+    - `pi-mcp-extension.test.ts` 使用真实 stdio MCP server 通过 `mcp__docs__call_tool` 调用 `inspect-result`，验证兜底结果包含 `bridgeType`、`server`、`toolName`、`nativeToolName`。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.120`。
+- 当前边界：
+  - 这是 metadata parity，不改变 MCP 调用能力本身。
+  - 逐工具与服务器级兜底现在可以通过 `details.bridgeType` 稳定区分。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-mcp-extension.test.ts -t "fallback call_tool"`：红灯确认缺少 `bridgeType/nativeToolName`，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-mcp-extension.test.ts -t "remote tool preserves structured MCP results"`：3 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

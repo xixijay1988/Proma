@@ -684,6 +684,47 @@ describe('pi mcp extension', () => {
     }
   })
 
+  test('Given real stdio MCP server When fallback call_tool runs Then bridge result keeps provenance metadata', async () => {
+    const configDir = mkdtempSync(join(tmpdir(), 'proma-pi-mcp-extension-'))
+    try {
+      const serverPath = join(configDir, 'fixture-mcp-server.mjs')
+      writeMcpFixtureServer(serverPath)
+
+      const extensionPath = ensurePiMcpExtension({
+        configDir,
+        servers: {
+          docs: {
+            type: 'stdio',
+            command: process.execPath,
+            args: [serverPath],
+            enabled: true,
+          },
+        },
+      })
+      expect(extensionPath).not.toBeNull()
+      if (!extensionPath) throw new Error('Expected Pi MCP extension path')
+
+      const result = await runGeneratedBridgeTool({
+        extensionPath,
+        toolName: 'mcp__docs__call_tool',
+        params: {
+          toolName: 'inspect-result',
+          arguments: { topic: 'fallback-alpha' },
+        },
+      })
+
+      expectStructuredFixtureResult(result, 'fallback-alpha')
+      expect(result.details).toMatchObject({
+        bridgeType: 'proma-pi-mcp-call-tool',
+        server: 'docs',
+        toolName: 'inspect-result',
+        nativeToolName: 'mcp__docs__call_tool',
+      })
+    } finally {
+      rmSync(configDir, { recursive: true, force: true })
+    }
+  })
+
   test('Given real stdio MCP server When generated bridge registers remote tools Then permission risk hints are published', async () => {
     const configDir = mkdtempSync(join(tmpdir(), 'proma-pi-mcp-extension-'))
     try {

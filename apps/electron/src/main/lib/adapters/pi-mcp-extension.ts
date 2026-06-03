@@ -359,8 +359,10 @@ function createCallToolTool(server) {
           content: normalizeMcpContentBlocks(result.content),
           structuredContent: result.structuredContent,
           details: {
+            bridgeType: 'proma-pi-mcp-call-tool',
             server: server.name,
             toolName: params.toolName,
+            nativeToolName: server.callToolToolName,
             structuredContent: result.structuredContent,
             isError: result.isError === true,
           },
@@ -370,9 +372,11 @@ function createCallToolTool(server) {
         return {
           content: [{ type: 'text', text: formatMcpBridgeError(server, 'call_tool', error, params.toolName) }],
           details: {
+            bridgeType: 'proma-pi-mcp-call-tool',
             server: server.name,
             operation: 'call_tool',
             toolName: params.toolName,
+            nativeToolName: server.callToolToolName,
             error: getErrorMessage(error),
           },
           isError: true,
