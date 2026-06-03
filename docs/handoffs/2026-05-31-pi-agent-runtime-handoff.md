@@ -2292,6 +2292,39 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun run electron:build`：Electron build exit 0；保留既有 Vite large chunk warning。
   - `git diff --check`：无 whitespace 问题。
 
+## 2026-06-03 Phase J65 Pi auto retry abort IPC/UI
+
+- 背景：
+  - Pi interactive mode 在自动重试倒计时时支持通过 Escape 取消 retry。
+  - Proma J64 已能显示 Pi runtime retry lifecycle，但用户还不能只取消 retry，只能停止整个 Agent。
+  - J65 补齐"状态可见后可控制"这层能力，让 Pi 自动重试体验更接近原生 runtime。
+- 实现：
+  - `@proma/shared`：
+    - 新增 `AbortRuntimeRetryInput`。
+    - 新增 `AGENT_IPC_CHANNELS.ABORT_RUNTIME_RETRY = "agent:abort-runtime-retry"`。
+  - `AgentOrchestrator`：
+    - 新增 `abortRuntimeRetry(sessionId)`，要求会话活跃且 adapter 支持 `abortRetry()`。
+    - 不支持的 runtime 会抛出明确中文错误，不做 silent no-op。
+  - `agent-service.ts` / `ipc.ts` / `preload/index.ts`：
+    - 暴露 `abortAgentRuntimeRetry()` 与 `window.electronAPI.abortRuntimeRetry(input)`。
+  - `AgentMessages.RetryingNotice`：
+    - 非失败重试状态显示一个停止图标按钮。
+    - 点击后调用新 IPC；UI 状态仍等待 runtime 后续 `auto_retry_end` / `retry_failed` 事件更新。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.101`。
+  - `@proma/shared` patch bump 到 `0.1.55`。
+- 当前边界：
+  - Claude SDK 路径没有等价 runtime retry abort 能力；调用会明确报错。
+  - Pi `get_state` 当前未暴露 `isRetrying` / `autoRetryEnabled`，J65 不修改 Pi runtime state 解析。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --test-name-pattern "aborting runtime retry" --timeout 30000`：红灯确认方法缺失，实现后 1 pass / 0 fail。
+  - `bun run --filter='@proma/electron' typecheck`：exit 0。
+  - `bun run --filter='@proma/shared' typecheck`：exit 0。
+  - `bun test apps/electron/src/main/lib/agent-session-manager.test.ts apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/adapters/pi-process.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts apps/electron/src/main/lib/adapters/pi-git-checkpoint-extension.test.ts apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts apps/electron/src/main/lib/adapters/pi-mcp-extension.test.ts apps/electron/src/main/lib/adapters/pi-memory-extension.test.ts apps/electron/src/main/lib/adapters/pi-nano-banana-extension.test.ts apps/electron/src/main/lib/adapters/pi-task-extension.test.ts --timeout 30000`：150 pass / 0 fail。
+  - `bun run typecheck`：4 个 workspace 包 typecheck 均 exit 0。
+  - `bun run electron:build`：Electron build exit 0；保留既有 Vite large chunk warning。
+  - `git diff --check`：无 whitespace 问题。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

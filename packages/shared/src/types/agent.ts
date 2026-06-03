@@ -1037,6 +1037,14 @@ export interface StopTaskInput {
   type: 'agent' | 'shell'
 }
 
+/**
+ * 中止 runtime 自动重试请求
+ */
+export interface AbortRuntimeRetryInput {
+  /** 会话 ID */
+  sessionId: string
+}
+
 // ===== Agent Runtime 状态 =====
 
 /** 获取活跃 Agent runtime 状态请求 */
@@ -1489,6 +1497,8 @@ export const AGENT_IPC_CHANNELS = {
   GET_TASK_OUTPUT: 'agent:get-task-output',
   /** 停止任务 */
   STOP_TASK: 'agent:stop-task',
+  /** 中止 runtime 自动重试 */
+  ABORT_RUNTIME_RETRY: 'agent:abort-runtime-retry',
   /** 获取活跃 runtime 状态 */
   GET_RUNTIME_STATE: 'agent:get-runtime-state',
 

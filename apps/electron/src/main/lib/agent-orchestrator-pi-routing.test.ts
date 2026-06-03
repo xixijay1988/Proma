@@ -2524,6 +2524,81 @@ describe('AgentOrchestrator pi routing', () => {
     expect(result.stopTaskCalls).toEqual([{ sessionId: 'session-stop-task', taskId: 'task-123' }])
   })
 
+  test('Given active session When aborting runtime retry Then delegates to adapter abortRetry', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+
+      let releaseAgentEnd
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+
+      class FakeAdapter {
+        abortRetryCalls = []
+
+        async *query(input) {
+          await waitForRelease
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        async abortRetry(sessionId) {
+          this.abortRetryCalls.push({ sessionId })
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const adapter = new FakeAdapter()
+      const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
+      const runPromise = orchestrator.sendMessage({
+        sessionId: 'session-abort-runtime-retry',
+        userMessage: 'run task',
+        channelId: 'missing-channel',
+        modelId: 'model',
+        startedAt: 993,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await orchestrator.abortRuntimeRetry('session-abort-runtime-retry')
+      releaseAgentEnd()
+      await runPromise
+
+      console.log(JSON.stringify({
+        abortRetryCalls: adapter.abortRetryCalls,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('abortRetryCalls'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      abortRetryCalls?: Array<{ sessionId?: string }>
+    }
+
+    expect(result.abortRetryCalls).toEqual([{ sessionId: 'session-abort-runtime-retry' }])
+  })
+
   test('Given active session When stopping shell task Then delegates to adapter stopShellTask', () => {
     const output = runOrchestratorScript(`
       import { mock } from 'bun:test'

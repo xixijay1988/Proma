@@ -7,7 +7,7 @@
 
 import * as React from 'react'
 import { useAtomValue, useSetAtom } from 'jotai'
-import { Bot, RotateCw, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react'
+import { Bot, RotateCw, AlertTriangle, ChevronDown, ChevronRight, Square } from 'lucide-react'
 import { WelcomeEmptyState } from '@/components/welcome/WelcomeEmptyState'
 import {
   Message,
@@ -134,9 +134,10 @@ function AssistantLogo({ model }: { model?: string }): React.ReactElement {
 }
 
 /** 重试提示组件 - 折叠式 */
-function RetryingNotice({ retrying }: { retrying: NonNullable<AgentStreamState['retrying']> }): React.ReactElement {
+function RetryingNotice({ retrying, sessionId }: { retrying: NonNullable<AgentStreamState['retrying']>; sessionId: string }): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
   const [countdown, setCountdown] = React.useState(0)
+  const [aborting, setAborting] = React.useState(false)
 
   // 倒计时逻辑
   React.useEffect(() => {
@@ -167,33 +168,61 @@ function RetryingNotice({ retrying }: { retrying: NonNullable<AgentStreamState['
     return () => clearInterval(timer)
   }, [retrying.failed, retrying.history])
 
+  const handleAbortRetry = React.useCallback((): void => {
+    if (aborting || retrying.failed) return
+
+    setAborting(true)
+    window.electronAPI.abortRuntimeRetry({ sessionId }).catch((error: unknown) => {
+      console.error('[AgentMessages] 中止自动重试失败:', error)
+      setAborting(false)
+    })
+  }, [aborting, retrying.failed, sessionId])
+
   return (
     <div className="rounded-lg border border-amber-200 bg-amber-50/50 dark:border-amber-800 dark:bg-amber-950/20 p-3 mb-3">
       {/* 头部：简洁状态 */}
-      <button
-        type="button"
-        className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity"
-        onClick={() => setExpanded(!expanded)}
-      >
-        {retrying.failed ? (
-          <AlertTriangle className="size-4 text-amber-600 dark:text-amber-400 shrink-0" />
-        ) : (
-          <RotateCw className="size-4 animate-spin text-amber-600 dark:text-amber-400 shrink-0" />
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-2 text-left transition-opacity hover:opacity-80"
+          onClick={() => setExpanded(!expanded)}
+        >
+          {retrying.failed ? (
+            <AlertTriangle className="size-4 text-amber-600 dark:text-amber-400 shrink-0" />
+          ) : (
+            <RotateCw className="size-4 animate-spin text-amber-600 dark:text-amber-400 shrink-0" />
+          )}
+          <span className="min-w-0 flex-1 text-sm text-amber-900 dark:text-amber-100">
+            {retrying.failed
+              ? `重试失败 (${retrying.currentAttempt}/${retrying.maxAttempts})`
+              : countdown > 0
+                ? `重试倒计时 ${countdown}秒 (${retrying.currentAttempt}/${retrying.maxAttempts})`
+                : `重试中 (${retrying.currentAttempt}/${retrying.maxAttempts})`}
+            {retrying.history.length > 0 && ` · ${retrying.history[retrying.history.length - 1]?.reason}`}
+          </span>
+          {expanded ? (
+            <ChevronDown className="size-4 text-amber-600 dark:text-amber-400 shrink-0" />
+          ) : (
+            <ChevronRight className="size-4 text-amber-600 dark:text-amber-400 shrink-0" />
+          )}
+        </button>
+        {!retrying.failed && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex size-6 items-center justify-center rounded-md text-amber-700 transition-colors hover:bg-amber-100 hover:text-amber-900 dark:text-amber-300 dark:hover:bg-amber-900/40 dark:hover:text-amber-100"
+                aria-label="取消自动重试"
+                disabled={aborting}
+                onClick={handleAbortRetry}
+              >
+                <Square className={cn('size-3.5', aborting && 'opacity-50')} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>取消自动重试</TooltipContent>
+          </Tooltip>
         )}
-        <span className="text-sm text-amber-900 dark:text-amber-100 flex-1">
-          {retrying.failed
-            ? `重试失败 (${retrying.currentAttempt}/${retrying.maxAttempts})`
-            : countdown > 0
-              ? `重试倒计时 ${countdown}秒 (${retrying.currentAttempt}/${retrying.maxAttempts})`
-              : `重试中 (${retrying.currentAttempt}/${retrying.maxAttempts})`}
-          {retrying.history.length > 0 && ` · ${retrying.history[retrying.history.length - 1]?.reason}`}
-        </span>
-        {expanded ? (
-          <ChevronDown className="size-4 text-amber-600 dark:text-amber-400 shrink-0" />
-        ) : (
-          <ChevronRight className="size-4 text-amber-600 dark:text-amber-400 shrink-0" />
-        )}
-      </button>
+      </div>
 
       {/* 展开内容：重试历史 */}
       {expanded && retrying.history.length > 0 && (
@@ -638,7 +667,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
                 匹配内部 MessageActions 的 gap-0.5(2px)+mt-0.5(2px)=4px 间距 */}
             {hasLiveAssistantContent && !suppressAgentRunning && (
               <div className="pl-[56px] min-h-[28px]">
-                {retrying && <RetryingNotice retrying={retrying} />}
+                {retrying && <RetryingNotice retrying={retrying} sessionId={sessionId} />}
                 {streaming && <AgentRunningIndicator startedAt={startedAt} />}
               </div>
             )}
@@ -653,7 +682,7 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
                   logo={<AssistantLogo model={agentStreamingModel} />}
                 />
                 <MessageContent>
-                  {retrying && <RetryingNotice retrying={retrying} />}
+                  {retrying && <RetryingNotice retrying={retrying} sessionId={sessionId} />}
                   {smoothContent ? (
                     <>
                       <MessageResponse basePath={sessionPath || undefined} basePaths={attachedDirs}>{smoothContent}</MessageResponse>

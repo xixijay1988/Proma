@@ -25,6 +25,7 @@ import type {
   AgentStreamPayload,
   AgentQueueMessageInput,
   StopTaskInput,
+  AbortRuntimeRetryInput,
   PromaPermissionMode,
   AgentExternalRunSource,
   AgentEngine,
@@ -516,6 +517,13 @@ export async function stopAgentTask(input: StopTaskInput): Promise<void> {
     return
   }
   await getSessionOperationOrchestrator(input.sessionId).stopTask(input.sessionId, input.taskId)
+}
+
+/**
+ * 中止活跃 runtime 中正在进行的自动重试。
+ */
+export async function abortAgentRuntimeRetry(input: AbortRuntimeRetryInput): Promise<void> {
+  await getSessionOperationOrchestrator(input.sessionId).abortRuntimeRetry(input.sessionId)
 }
 
 /**

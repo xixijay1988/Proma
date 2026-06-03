@@ -3181,6 +3181,23 @@ export class AgentOrchestrator {
   }
 
   /**
+   * 中止活跃 runtime 中正在等待的自动重试。
+   *
+   * Pi RPC 支持 abort_retry；不支持该能力的 runtime 会在此处明确报错。
+   */
+  async abortRuntimeRetry(sessionId: string): Promise<void> {
+    if (!this.activeSessions.has(sessionId)) {
+      throw new Error(`[Agent 编排] 会话未运行，无法中止自动重试: ${sessionId}`)
+    }
+
+    if (!this.adapter.abortRetry) {
+      throw new Error('[Agent 编排] 当前适配器不支持中止自动重试')
+    }
+
+    await this.adapter.abortRetry(sessionId)
+  }
+
+  /**
    * 停止活跃 runtime 中的 Shell 任务。
    *
    * Pi RPC 支持 abort_bash；不支持该能力的 runtime 会在此处明确报错。
