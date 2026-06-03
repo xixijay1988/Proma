@@ -1359,37 +1359,65 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
   /** ModelSelector 选择回调 */
   const handleModelSelect = React.useCallback((option: ModelOption): void => {
-    // 更新当前会话的 per-session 配置
-    setSessionChannelMap((prev) => {
-      const map = new Map(prev)
-      map.set(sessionId, option.channelId)
-      return map
-    })
-    setSessionModelMap((prev) => {
-      const map = new Map(prev)
-      map.set(sessionId, option.modelId)
-      return map
-    })
+    const applyModelSelection = (): void => {
+      // 更新当前会话的 per-session 配置
+      setSessionChannelMap((prev) => {
+        const map = new Map(prev)
+        map.set(sessionId, option.channelId)
+        return map
+      })
+      setSessionModelMap((prev) => {
+        const map = new Map(prev)
+        map.set(sessionId, option.modelId)
+        return map
+      })
 
-    // 自动将选中的渠道加入 Agent 可用渠道白名单
+      // 同时更新全局默认值（新会话继承）
+      setDefaultChannelId(option.channelId)
+      setDefaultModelId(option.modelId)
+    }
+
     const updatedChannelIds = agentChannelIds.includes(option.channelId)
       ? agentChannelIds
       : [...agentChannelIds, option.channelId]
-    if (updatedChannelIds !== agentChannelIds) {
-      setAgentChannelIds(updatedChannelIds)
+
+    const persistModelSelection = (): void => {
+      // 自动将选中的渠道加入 Agent 可用渠道白名单
+      if (updatedChannelIds !== agentChannelIds) {
+        setAgentChannelIds(updatedChannelIds)
+      }
+
+      // 持久化到设置
+      window.electronAPI.updateSettings({
+        agentChannelId: option.channelId,
+        agentModelId: option.modelId,
+        agentChannelIds: updatedChannelIds,
+      }).catch(console.error)
     }
 
-    // 同时更新全局默认值（新会话继承）
-    setDefaultChannelId(option.channelId)
-    setDefaultModelId(option.modelId)
+    if (isPiAgentEngine && streaming) {
+      window.electronAPI.updateRuntimeModel({
+        sessionId,
+        channelId: option.channelId,
+        modelId: option.modelId,
+      }).then(() => {
+        applyModelSelection()
+        persistModelSelection()
+        toast.success('已切换 Pi runtime 模型', {
+          description: option.modelName || option.modelId,
+        })
+      }).catch((error: unknown) => {
+        console.error('[AgentView] 切换 Pi runtime 模型失败:', error)
+        toast.error('切换 Pi runtime 模型失败', {
+          description: error instanceof Error ? error.message : '未知错误',
+        })
+      })
+      return
+    }
 
-    // 持久化到设置
-    window.electronAPI.updateSettings({
-      agentChannelId: option.channelId,
-      agentModelId: option.modelId,
-      agentChannelIds: updatedChannelIds,
-    }).catch(console.error)
-  }, [sessionId, setSessionChannelMap, setSessionModelMap, setDefaultChannelId, setDefaultModelId, agentChannelIds, setAgentChannelIds])
+    applyModelSelection()
+    persistModelSelection()
+  }, [sessionId, setSessionChannelMap, setSessionModelMap, setDefaultChannelId, setDefaultModelId, agentChannelIds, setAgentChannelIds, isPiAgentEngine, streaming])
 
   /** 构建 externalSelectedModel 给 ModelSelector */
   const externalSelectedModel = React.useMemo(() => {

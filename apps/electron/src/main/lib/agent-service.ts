@@ -30,6 +30,7 @@ import type {
   UpdateRuntimeAutoControlsInput,
   UpdateRuntimeQueueModesInput,
   UpdateRuntimeThinkingLevelInput,
+  UpdateRuntimeModelInput,
   PromaPermissionMode,
   AgentExternalRunSource,
   AgentEngine,
@@ -49,7 +50,7 @@ import { scanAndKillOrphanedClaudeSubprocesses } from './adapters/claude-agent-a
 import { createAgentAdapterRegistry } from './agent-adapter-registry'
 import { AgentEventBus } from './agent-event-bus'
 import { AgentOrchestrator } from './agent-orchestrator'
-import { getAgentSessionWorkspacePath, getWorkspaceFilesDir } from './config-paths'
+import { getAgentSessionWorkspacePath, getWorkspaceFilesDir, getConfigDir } from './config-paths'
 import {
   appendSDKMessages,
   createAgentSession,
@@ -62,6 +63,8 @@ import {
 import { getAgentWorkspace } from './agent-workspace-manager'
 import { resolveAgentEngine, resolveExistingSessionAgentEngine } from './agent-engine'
 import { applyPiGitCheckpoint, type PiGitCommandResult } from './adapters/pi-git-checkpoint-extension'
+import { preparePiRuntimeConfig, resolvePiRuntimeModelSwitch } from './adapters/pi-runtime-config'
+import { decryptApiKey, getChannelById } from './channel-manager'
 
 const MAX_IMPORTED_PI_TITLE_LENGTH = 20
 const DEFAULT_AGENT_SESSION_TITLES = new Set([
@@ -69,6 +72,12 @@ const DEFAULT_AGENT_SESSION_TITLES = new Set([
   '新会话',
   '未命名会话',
 ])
+
+interface PiRuntimeModelSwitchInput {
+  sessionId: string
+  provider: string
+  modelId: string
+}
 
 // ===== 实例创建 =====
 
@@ -558,6 +567,57 @@ export async function updateAgentRuntimeThinkingLevel(input: UpdateRuntimeThinki
     input.sessionId,
     input.thinkingLevel,
   )
+}
+
+/**
+ * 更新活跃 runtime 的模型。
+ */
+export async function updateAgentRuntimeModel(input: UpdateRuntimeModelInput): Promise<void> {
+  const runtimeModel = buildPiRuntimeModelSwitchInput(input)
+  const channel = getChannelById(input.channelId)
+  if (channel) {
+    preparePiRuntimeConfig({
+      promaConfigDir: getConfigDir(),
+      sessionId: input.sessionId,
+      channel,
+      apiKey: (() => {
+        try {
+          return decryptApiKey(channel.id)
+        } catch {
+          return undefined
+        }
+      })(),
+      model: input.modelId,
+    })
+  }
+  await getSessionOperationOrchestrator(input.sessionId).updateRuntimeModel(input.sessionId, {
+    provider: runtimeModel.provider,
+    modelId: runtimeModel.modelId,
+  })
+}
+
+/**
+ * 根据 Proma channel / model 生成 Pi runtime 模型切换输入。
+ */
+export function buildPiRuntimeModelSwitchInput(input: {
+  sessionId: string
+  channelId: string
+  modelId: string
+}): PiRuntimeModelSwitchInput {
+  const channel = getChannelById(input.channelId)
+  if (!channel) {
+    throw new Error(`渠道不存在: ${input.channelId}`)
+  }
+
+  const runtimeModel = resolvePiRuntimeModelSwitch({
+    providerType: channel.provider,
+    model: input.modelId,
+  })
+
+  return {
+    sessionId: input.sessionId,
+    ...runtimeModel,
+  }
 }
 
 /**

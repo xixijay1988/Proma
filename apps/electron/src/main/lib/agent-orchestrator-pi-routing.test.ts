@@ -3225,6 +3225,84 @@ describe('AgentOrchestrator pi routing', () => {
     expect(result.autoRetryCalls).toEqual([{ sessionId: 'session-set-auto-controls', enabled: true }])
   })
 
+  test('Given active session When runtime model is changed Then delegates to adapter model command', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+
+      let releaseAgentEnd
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+
+      class FakeAdapter {
+        modelCalls = []
+
+        async *query(input) {
+          await waitForRelease
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        async setModel(sessionId, input) {
+          this.modelCalls.push({ sessionId, ...input })
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const adapter = new FakeAdapter()
+      const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
+      const runPromise = orchestrator.sendMessage({
+        sessionId: 'session-set-runtime-model',
+        userMessage: 'run task',
+        channelId: 'missing-channel',
+        modelId: 'model',
+        startedAt: 996,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await orchestrator.updateRuntimeModel('session-set-runtime-model', {
+        provider: 'openai',
+        modelId: 'qwen-plus',
+      })
+      releaseAgentEnd()
+      await runPromise
+
+      console.log(JSON.stringify({
+        modelCalls: adapter.modelCalls,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('modelCalls'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      modelCalls?: Array<{ sessionId?: string; provider?: string; modelId?: string }>
+    }
+
+    expect(result.modelCalls).toEqual([{ sessionId: 'session-set-runtime-model', provider: 'openai', modelId: 'qwen-plus' }])
+  })
+
   test('Given active session When queue modes are changed Then delegates to adapter queue mode commands', () => {
     const output = runOrchestratorScript(`
       import { mock } from 'bun:test'

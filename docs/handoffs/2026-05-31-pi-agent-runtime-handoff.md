@@ -2743,6 +2743,39 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "auto controls are changed"`：红灯确认 `updateRuntimeAutoControls` 缺失；实现后 1 pass / 0 fail。
   - `bun run --filter='@proma/electron' typecheck`：通过。
 
+## 2026-06-03 Phase J82 Pi runtime model switching
+
+- 背景：
+  - Pi RPC 支持运行中 `set_model`，但 Proma 之前在 Pi 会话 streaming 时切换模型只会更新 UI 与默认设置。
+  - 这会导致“Proma 显示已选新模型，但活跃 Pi runtime 仍使用旧模型”的错位，尤其是长任务后台运行时更容易误判。
+  - Claude SDK 当前没有等价的运行中模型切换 API，因此本阶段以 adapter optional capability 接入，只在 Pi runtime 支持路径启用。
+- 实现：
+  - `@proma/shared`：
+    - `AgentProviderAdapter` 新增可选 `setModel(sessionId, { provider, modelId })`。
+    - 新增 `UpdateRuntimeModelInput` 与 IPC 通道 `agent:update-runtime-model`。
+  - Main / Preload：
+    - `PiAgentAdapter` 将 `set_model` 加入 runtime command 白名单，并新增 `setModel()`，通过 Pi RPC 发送 `{ type: "set_model", provider, modelId }`。
+    - `pi-runtime-config.ts` 新增 `resolvePiRuntimeModelSwitch()`，复用 Proma provider 到 Pi provider 映射，并规范化 `provider/model` 形式的模型 ID。
+    - `agent-service.updateAgentRuntimeModel()` 在发送 `set_model` 前刷新当前 session 的 Pi `models.json`，让 OpenAI-compatible provider 的新模型先进入 Pi runtime 配置。
+    - `AgentOrchestrator.updateRuntimeModel()` 校验会话活跃和 adapter capability，再转发给底层 runtime。
+    - `ipc.ts`、`preload/index.ts` 接入 `updateRuntimeModel()`。
+  - Renderer：
+    - `AgentView` 的模型选择器在 Pi + streaming 场景下先调用 `updateRuntimeModel()`。
+    - 只有 Pi RPC 切换成功后才更新 per-session 模型、全局默认模型和设置；失败时保留原选择并 toast 报错。
+- 版本：
+  - `@proma/shared` patch bump 到 `0.1.64`。
+  - `@proma/electron` patch bump 到 `0.10.118`。
+- 当前边界：
+  - 这是 Pi runtime-only 控制，不代表 Claude SDK 支持运行中模型切换。
+  - 已运行的 Pi 进程无法动态新增环境变量；切换跨 provider 时，最可靠路径仍是该 provider 的 API key / baseUrl 已在本 session 的 Pi 环境与配置中可见。
+  - Proma 会在发 `set_model` 前刷新 session 级 `models.json`，用于补齐 Qwen / Doubao / Zhipu / Custom 等 OpenAI-compatible provider 的模型注册；但具体模型是否可用仍由 Pi runtime 与目标 Provider 返回结果决定。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-runtime-config.test.ts -t "refreshes registered model id"`：新增用例通过。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "model changes"`：通过。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "runtime model is changed"`：通过。
+  - `bun test apps/electron/src/main/lib/adapters/pi-runtime-config.test.ts -t "switching runtime model"`：通过。
+  - `bun run --filter='@proma/electron' typecheck`：通过。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

@@ -209,6 +209,8 @@ export interface AgentProviderAdapter {
   abortRetry?(sessionId: string): Promise<void>
   /** 动态切换活跃 runtime 的推理深度（可选，仅支持具备 thinking level 的 Provider） */
   setThinkingLevel?(sessionId: string, level: string): Promise<void>
+  /** 动态切换活跃 runtime 的模型（可选，仅支持具备 runtime model switch 的 Provider） */
+  setModel?(sessionId: string, input: { provider: string; modelId: string }): Promise<void>
   /** 动态切换活跃查询的权限模式（可选，仅支持 SDK 原生 setPermissionMode 的 Provider） */
   setPermissionMode?(sessionId: string, mode: string): Promise<void>
   /** 动态切换活跃 runtime 的 steering 队列投递模式（可选，仅支持具备 queue mode 的 Provider） */

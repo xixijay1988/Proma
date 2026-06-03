@@ -3296,6 +3296,26 @@ export class AgentOrchestrator {
   }
 
   /**
+   * 更新活跃 runtime 的模型。
+   *
+   * Pi RPC 支持 set_model；不支持该能力的 runtime 会明确报错。
+   */
+  async updateRuntimeModel(
+    sessionId: string,
+    input: { provider: string; modelId: string },
+  ): Promise<void> {
+    if (!this.activeSessions.has(sessionId)) {
+      throw new Error(`[Agent 编排] 会话未运行，无法更新模型: ${sessionId}`)
+    }
+
+    if (!this.adapter.setModel) {
+      throw new Error('[Agent 编排] 当前适配器不支持运行中模型切换')
+    }
+
+    await this.adapter.setModel(sessionId, input)
+  }
+
+  /**
    * 停止活跃 runtime 中的 Shell 任务。
    *
    * Pi RPC 支持 abort_bash；不支持该能力的 runtime 会在此处明确报错。

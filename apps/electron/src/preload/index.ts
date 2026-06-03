@@ -56,6 +56,7 @@ import type {
   UpdateRuntimeAutoControlsInput,
   UpdateRuntimeQueueModesInput,
   UpdateRuntimeThinkingLevelInput,
+  UpdateRuntimeModelInput,
   GetRuntimeStateInput,
   AgentRuntimeStateResult,
   WorkspaceMcpConfig,
@@ -515,6 +516,9 @@ export interface ElectronAPI {
 
   /** 更新 runtime 推理深度 */
   updateRuntimeThinkingLevel: (input: UpdateRuntimeThinkingLevelInput) => Promise<void>
+
+  /** 更新 runtime 模型 */
+  updateRuntimeModel: (input: UpdateRuntimeModelInput) => Promise<void>
 
   /** 获取活跃 runtime 状态 */
   getRuntimeState: (input: GetRuntimeStateInput) => Promise<AgentRuntimeStateResult>
@@ -1535,6 +1539,10 @@ const electronAPI: ElectronAPI = {
 
   updateRuntimeThinkingLevel: (input: UpdateRuntimeThinkingLevelInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_RUNTIME_THINKING_LEVEL, input)
+  },
+
+  updateRuntimeModel: (input: UpdateRuntimeModelInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_RUNTIME_MODEL, input)
   },
 
   getRuntimeState: (input: GetRuntimeStateInput) => {

@@ -1098,6 +1098,18 @@ export interface UpdateRuntimeThinkingLevelInput {
   thinkingLevel: PiRuntimeThinkingLevel
 }
 
+/**
+ * 更新 runtime 模型请求
+ */
+export interface UpdateRuntimeModelInput {
+  /** 会话 ID */
+  sessionId: string
+  /** Proma 渠道 ID */
+  channelId: string
+  /** Proma 模型 ID */
+  modelId: string
+}
+
 // ===== Agent Runtime 状态 =====
 
 /** 获取活跃 Agent runtime 状态请求 */
@@ -1562,6 +1574,8 @@ export const AGENT_IPC_CHANNELS = {
   UPDATE_RUNTIME_QUEUE_MODES: 'agent:update-runtime-queue-modes',
   /** 更新 runtime 推理深度 */
   UPDATE_RUNTIME_THINKING_LEVEL: 'agent:update-runtime-thinking-level',
+  /** 更新 runtime 模型 */
+  UPDATE_RUNTIME_MODEL: 'agent:update-runtime-model',
   /** 获取活跃 runtime 状态 */
   GET_RUNTIME_STATE: 'agent:get-runtime-state',
 

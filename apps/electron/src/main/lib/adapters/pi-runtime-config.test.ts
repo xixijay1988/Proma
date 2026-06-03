@@ -11,6 +11,7 @@ import {
   getPiRuntimeProviderContractsForTest,
   preparePiRuntimeConfig,
   resolvePiProviderMappingForTest,
+  resolvePiRuntimeModelSwitch,
 } from './pi-runtime-config'
 import { startPiRpcSession, type PiRpcEvent } from './pi-process'
 
@@ -139,6 +140,46 @@ describe('pi runtime config', () => {
     }
   })
 
+  test('Given same Pi session When preparing runtime config again Then refreshes registered model id', () => {
+    const homeDir = mkdtempSync(join(tmpdir(), 'proma-pi-runtime-refresh-'))
+    try {
+      const baseInput = {
+        promaConfigDir: homeDir,
+        sessionId: 'session-pi-runtime-refresh',
+        channel: {
+          id: 'channel-qwen-refresh',
+          name: 'Qwen',
+          provider: 'qwen' as const,
+          baseUrl: 'https://example.com/v1',
+          apiKey: '',
+          models: [],
+          enabled: true,
+          createdAt: 0,
+          updatedAt: 0,
+        },
+        apiKey: 'sk-openai',
+      }
+
+      preparePiRuntimeConfig({
+        ...baseInput,
+        model: 'qwen/qwen-old',
+      })
+      const config = preparePiRuntimeConfig({
+        ...baseInput,
+        model: 'qwen/qwen-plus',
+      })
+
+      const modelsJson = readModelsJson(config.configDir)
+
+      expect(modelsJson?.providers?.openai?.models).toEqual([{
+        id: 'qwen-plus',
+        name: 'qwen-plus',
+      }])
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true })
+    }
+  })
+
   test('Given DeepSeek Anthropic-compatible channel When preparing runtime config Then keeps Pi built-in base url', () => {
     const homeDir = mkdtempSync(join(tmpdir(), 'proma-pi-runtime-'))
     try {
@@ -181,6 +222,16 @@ describe('pi runtime config', () => {
       provider: 'moonshotai',
       apiKeyEnv: 'MOONSHOT_API_KEY',
       registerModel: true,
+    })
+  })
+
+  test('Given OpenAI-compatible provider When switching runtime model Then maps to Pi provider and normalized model id', () => {
+    expect(resolvePiRuntimeModelSwitch({
+      providerType: 'qwen',
+      model: 'qwen/qwen-plus',
+    })).toEqual({
+      provider: 'openai',
+      modelId: 'qwen-plus',
     })
   })
 

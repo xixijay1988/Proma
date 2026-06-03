@@ -344,6 +344,78 @@ describe('PiAgentAdapter', () => {
     })
   })
 
+  test('Given active Pi query When model changes Then sends set_model command', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+      let releaseAgentEnd
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'set_model') {
+              queueMicrotask(() => releaseAgentEnd({
+                type: 'response',
+                id: command.id,
+                command: 'set_model',
+                success: true,
+                data: { id: command.modelId, provider: command.provider },
+              }))
+            }
+          },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield await waitForRelease
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const iterator = adapter.query({
+        sessionId: 'session-pi-set-model',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })[Symbol.asyncIterator]()
+
+      const firstYield = iterator.next()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      await adapter.setModel('session-pi-set-model', {
+        provider: 'openai',
+        modelId: 'qwen-plus',
+      })
+      await firstYield
+
+      console.log(JSON.stringify({
+        modelCommand: sentCommands.find((command) => command.type === 'set_model'),
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('modelCommand'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      modelCommand?: { type?: string; provider?: string; modelId?: string }
+    }
+
+    expect(result.modelCommand).toMatchObject({
+      type: 'set_model',
+      provider: 'openai',
+      modelId: 'qwen-plus',
+    })
+  })
+
   test('Given active Pi query When queued message is sent Then steers current RPC session', () => {
     const output = runPiAdapterScript(`
       import { mock } from 'bun:test'

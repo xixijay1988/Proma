@@ -59,6 +59,7 @@ const PI_RUNTIME_COMMANDS = new Set([
   'set_auto_compaction',
   'set_auto_retry',
   'set_follow_up_mode',
+  'set_model',
   'set_session_name',
   'set_steering_mode',
   'set_thinking_level',
@@ -1335,6 +1336,20 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       sessionId,
       { type: 'set_thinking_level', level: normalizePiThinkingLevel(level) },
       'proma-set-thinking-level',
+    )
+  }
+
+  async setModel(sessionId: string, input: { provider: string; modelId: string }): Promise<void> {
+    const provider = input.provider.trim()
+    const modelId = input.modelId.trim()
+    if (!provider || !modelId) {
+      throw new Error('[Pi Agent] runtime provider 和 modelId 不能为空')
+    }
+
+    await this.sendRuntimeCommand(
+      sessionId,
+      { type: 'set_model', provider, modelId },
+      'proma-set-model',
     )
   }
 

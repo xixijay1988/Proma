@@ -67,6 +67,7 @@ import type {
   UpdateRuntimeAutoControlsInput,
   UpdateRuntimeQueueModesInput,
   UpdateRuntimeThinkingLevelInput,
+  UpdateRuntimeModelInput,
   GetRuntimeStateInput,
   AgentRuntimeStateResult,
   WorkspaceMcpConfig,
@@ -191,7 +192,7 @@ import {
   searchAgentSessionReferences,
   getAgentTaskOutput,
 } from './lib/agent-session-manager'
-import { runAgent, stopAgent, stopAgentTask, abortAgentRuntimeRetry, updateAgentRuntimeAutoControls, updateAgentRuntimeQueueModes, updateAgentRuntimeThinkingLevel, renameAgentSessionTitle, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, forkAgentSession, cloneActiveAgentSession, switchActiveAgentSession, setPiSessionFileForNextRun, syncPiNativeSessionMessages, applyPiGitCheckpointForSession, getAgentRuntimeState } from './lib/agent-service'
+import { runAgent, stopAgent, stopAgentTask, abortAgentRuntimeRetry, updateAgentRuntimeAutoControls, updateAgentRuntimeQueueModes, updateAgentRuntimeThinkingLevel, updateAgentRuntimeModel, renameAgentSessionTitle, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, forkAgentSession, cloneActiveAgentSession, switchActiveAgentSession, setPiSessionFileForNextRun, syncPiNativeSessionMessages, applyPiGitCheckpointForSession, getAgentRuntimeState } from './lib/agent-service'
 import { assertAgentSessionForkSupported } from './lib/agent-session-capabilities'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
@@ -2172,6 +2173,19 @@ export function registerIpcHandlers(): void {
         await updateAgentRuntimeThinkingLevel(input)
       } catch (error) {
         console.error('[IPC] 更新 runtime 推理深度失败:', error)
+        throw error
+      }
+    }
+  )
+
+  // 更新 runtime 模型
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.UPDATE_RUNTIME_MODEL,
+    async (_, input: UpdateRuntimeModelInput): Promise<void> => {
+      try {
+        await updateAgentRuntimeModel(input)
+      } catch (error) {
+        console.error('[IPC] 更新 runtime 模型失败:', error)
         throw error
       }
     }

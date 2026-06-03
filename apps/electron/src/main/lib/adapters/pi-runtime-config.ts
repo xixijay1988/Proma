@@ -155,6 +155,21 @@ export function resolvePiProviderMappingForTest(provider: ProviderType): PiProvi
   return PI_PROVIDER_MAPPINGS[provider]
 }
 
+export function resolvePiRuntimeModelSwitch(input: {
+  providerType: ProviderType
+  model: string
+}): { provider: string; modelId: string } {
+  const mapping = PI_PROVIDER_MAPPINGS[input.providerType]
+  const modelId = normalizeModelIdForProvider(input.model)
+  if (!modelId) {
+    throw new Error('[Pi Agent] runtime modelId 不能为空')
+  }
+  return {
+    provider: mapping.provider,
+    modelId,
+  }
+}
+
 export function getPiRuntimeMappedProvidersForTest(): ProviderType[] {
   return Object.keys(PI_PROVIDER_MAPPINGS) as ProviderType[]
 }
