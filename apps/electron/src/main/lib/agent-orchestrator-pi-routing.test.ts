@@ -1872,4 +1872,79 @@ describe('AgentOrchestrator pi routing', () => {
 
     expect(result.permissionRequestIds).toEqual(['perm-1'])
   })
+
+  test('Given active session When stopping background task Then delegates to adapter stopTask', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+
+      let releaseAgentEnd
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+
+      class FakeAdapter {
+        stopTaskCalls = []
+
+        async *query(input) {
+          await waitForRelease
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        async stopTask(sessionId, taskId) {
+          this.stopTaskCalls.push({ sessionId, taskId })
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const adapter = new FakeAdapter()
+      const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
+      const runPromise = orchestrator.sendMessage({
+        sessionId: 'session-stop-task',
+        userMessage: 'run task',
+        channelId: 'missing-channel',
+        modelId: 'model',
+        startedAt: 991,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await orchestrator.stopTask('session-stop-task', 'task-123')
+      releaseAgentEnd()
+      await runPromise
+
+      console.log(JSON.stringify({
+        stopTaskCalls: adapter.stopTaskCalls,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('stopTaskCalls'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      stopTaskCalls?: Array<{ sessionId?: string; taskId?: string }>
+    }
+
+    expect(result.stopTaskCalls).toEqual([{ sessionId: 'session-stop-task', taskId: 'task-123' }])
+  })
 })

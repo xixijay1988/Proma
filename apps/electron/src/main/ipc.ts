@@ -185,7 +185,7 @@ import {
   searchAgentSessionReferences,
   getAgentTaskOutput,
 } from './lib/agent-session-manager'
-import { runAgent, stopAgent, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, forkAgentSession, cloneActiveAgentSession, switchActiveAgentSession, setPiSessionFileForNextRun, syncPiNativeSessionMessages, applyPiGitCheckpointForSession } from './lib/agent-service'
+import { runAgent, stopAgent, stopAgentTask, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, forkAgentSession, cloneActiveAgentSession, switchActiveAgentSession, setPiSessionFileForNextRun, syncPiNativeSessionMessages, applyPiGitCheckpointForSession } from './lib/agent-service'
 import { assertAgentSessionForkSupported } from './lib/agent-session-capabilities'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
@@ -2111,11 +2111,7 @@ export function registerIpcHandlers(): void {
     AGENT_IPC_CHANNELS.STOP_TASK,
     async (_, input: StopTaskInput): Promise<void> => {
       try {
-        if (input.type === 'shell') {
-          console.warn('[IPC] STOP_TASK: Shell 任务停止功能待实现')
-        } else {
-          console.warn('[IPC] STOP_TASK: Agent 任务暂不支持单独停止')
-        }
+        await stopAgentTask(input)
       } catch (error) {
         console.error('[IPC] 停止任务失败:', error)
         throw error

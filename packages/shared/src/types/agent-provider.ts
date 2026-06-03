@@ -129,6 +129,8 @@ export interface AgentProviderAdapter {
   sendQueuedMessage?(sessionId: string, message: SDKUserMessageInput): Promise<void>
   /** 取消队列中的待发送消息（可选） */
   cancelQueuedMessage?(sessionId: string, messageUuid: string): Promise<void>
+  /** 停止活跃 runtime 中的后台任务（可选，仅支持具备后台任务控制的 Provider） */
+  stopTask?(sessionId: string, taskId: string): Promise<void>
   /** 动态切换活跃查询的权限模式（可选，仅支持 SDK 原生 setPermissionMode 的 Provider） */
   setPermissionMode?(sessionId: string, mode: string): Promise<void>
   /** 获取活跃 runtime 的原生 fork 候选消息（可选，仅支持具备 session tree 的 Provider） */

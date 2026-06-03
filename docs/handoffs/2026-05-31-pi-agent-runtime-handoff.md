@@ -1958,11 +1958,45 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
 - 当前边界：
   - 这是只读历史输出恢复，不是 Claude SDK / Pi runtime 的实时后台任务控制。
   - 对 Pi 而言，它依赖 Proma 已经持久化过 Task bridge 的 tool_use/tool_result；运行时内存任务状态不会被单独拉取。
-  - `STOP_TASK` 仍只是占位警告，后续若要完整后台任务 parity，需要为 Claude SDK 与 Pi 分别实现真实停止语义或明确 UI 降级。
+  - J55 已将 `STOP_TASK` 接到 Claude SDK `query.stopTask(taskId)`；Pi 与 Shell 的任务停止仍需要后续按 runtime 能力继续补齐或明确 UI 降级。
 - 已运行：
   - `bun test apps/electron/src/main/lib/agent-session-manager.test.ts --test-name-pattern "task output" --timeout 30000`：红灯确认 `getAgentTaskOutput is not a function`，实现后 1 pass / 0 fail。
   - `bun test apps/electron/src/main/lib/agent-session-manager.test.ts --timeout 30000`：30 pass / 0 fail。
   - `bun test apps/electron/src/main/lib/agent-session-manager.test.ts apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/adapters/pi-process.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts apps/electron/src/main/lib/adapters/pi-git-checkpoint-extension.test.ts apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts apps/electron/src/main/lib/adapters/pi-mcp-extension.test.ts apps/electron/src/main/lib/adapters/pi-memory-extension.test.ts apps/electron/src/main/lib/adapters/pi-nano-banana-extension.test.ts apps/electron/src/main/lib/adapters/pi-task-extension.test.ts --timeout 30000`：132 pass / 0 fail。
+  - `bun run typecheck`：通过。
+  - `bun run electron:build`：通过，仅既有 Vite chunk-size warning。
+
+## 2026-06-03 Phase J55 Claude SDK STOP_TASK 真实停止路径
+
+- 背景：
+  - Renderer / preload / IPC 已经暴露 `AGENT_IPC_CHANNELS.STOP_TASK`，但主进程此前只打印占位 warning。
+  - Claude Agent SDK 的 `Query` 类型已经提供 `stopTask(taskId): Promise<void>`，并会在停止后通过 `task_notification` 推送 stopped 状态。
+  - Proma renderer 已有 `task_notification` 监听与 UI 更新路径，因此主进程只需要把停止请求路由到活跃 SDK query。
+- 实现：
+  - `AgentProviderAdapter` 新增可选能力 `stopTask(sessionId, taskId)`。
+  - `ClaudeAgentAdapter.stopTask()`：
+    - 从 `activeQueries` 查找当前会话的活跃 query。
+    - 调用 `query.stopTask(taskId)`。
+    - 如果会话没有活跃 query，返回明确中文错误。
+  - `AgentOrchestrator.stopTask()`：
+    - 先确认 session 仍在运行。
+    - 再检查当前 adapter 是否实现 `stopTask`。
+    - 对不支持的 runtime 返回明确错误，避免静默假成功。
+  - `agent-service.ts` 新增 `stopAgentTask(input)` 并接入 IPC：
+    - `type: 'agent'` 走 orchestrator。
+    - `type: 'shell'` 暂时明确报错：`Shell 后台任务停止暂未接入 runtime 控制`。
+  - `ipc.ts` 的 `STOP_TASK` 从占位 warning 改为调用 `stopAgentTask(input)`。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.91`。
+  - `@proma/shared` patch bump 到 `0.1.46`。
+- 当前边界：
+  - Claude SDK 后台 Task 停止已走真实 SDK 能力。
+  - Pi runtime 当前仍没有确认到同等 task stop RPC；如果前端对 Pi 会话触发 STOP_TASK，会得到“当前适配器不支持停止后台任务”的显式错误。
+  - Shell 后台任务停止仍未接入 runtime 控制，保持显式错误。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --test-name-pattern "stopping background task" --timeout 30000`：1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --timeout 30000`：19 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-session-manager.test.ts apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/adapters/pi-process.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts apps/electron/src/main/lib/adapters/pi-git-checkpoint-extension.test.ts apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts apps/electron/src/main/lib/adapters/pi-mcp-extension.test.ts apps/electron/src/main/lib/adapters/pi-memory-extension.test.ts apps/electron/src/main/lib/adapters/pi-nano-banana-extension.test.ts apps/electron/src/main/lib/adapters/pi-task-extension.test.ts --timeout 30000`：133 pass / 0 fail。
   - `bun run typecheck`：通过。
   - `bun run electron:build`：通过，仅既有 Vite chunk-size warning。
 

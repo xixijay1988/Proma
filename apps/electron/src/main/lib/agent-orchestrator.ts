@@ -3081,4 +3081,21 @@ export class AgentOrchestrator {
 
     return uuid
   }
+
+  /**
+   * 停止活跃 runtime 中的后台任务。
+   *
+   * Claude SDK 支持 query.stopTask(taskId)；不支持该能力的 runtime 会在此处明确报错。
+   */
+  async stopTask(sessionId: string, taskId: string): Promise<void> {
+    if (!this.activeSessions.has(sessionId)) {
+      throw new Error(`[Agent 编排] 会话未运行，无法停止后台任务: ${sessionId}`)
+    }
+
+    if (!this.adapter.stopTask) {
+      throw new Error('[Agent 编排] 当前适配器不支持停止后台任务')
+    }
+
+    await this.adapter.stopTask(sessionId, taskId)
+  }
 }

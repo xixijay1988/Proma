@@ -876,6 +876,21 @@ export class ClaudeAgentAdapter implements AgentProviderAdapter {
   }
 
   /**
+   * 停止 Claude SDK 后台任务。
+   *
+   * taskId 来自 SDK task_notification 事件。SDK 会在停止后继续发出
+   * status='stopped' 的 task_notification，由现有流式监听更新 UI。
+   */
+  async stopTask(sessionId: string, taskId: string): Promise<void> {
+    const query = activeQueries.get(sessionId)
+    if (!query) {
+      throw new Error(`[Claude 适配器] 无活跃查询可停止后台任务: ${sessionId}`)
+    }
+    await query.stopTask(taskId)
+    console.log(`[Claude 适配器] 后台任务停止请求已发送: sessionId=${sessionId}, taskId=${taskId}`)
+  }
+
+  /**
    * 动态切换活跃查询的权限模式
    *
    * 通过 SDK Query.setPermissionMode() 方法在查询进行中切换权限模式。

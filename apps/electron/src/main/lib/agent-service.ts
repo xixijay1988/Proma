@@ -24,6 +24,7 @@ import type {
   AgentStreamEvent,
   AgentStreamPayload,
   AgentQueueMessageInput,
+  StopTaskInput,
   PromaPermissionMode,
   AgentExternalRunSource,
   AgentEngine,
@@ -502,6 +503,16 @@ export async function generateAgentTitle(input: AgentGenerateTitleInput): Promis
  */
 export function stopAgent(sessionId: string): void {
   getSessionOperationOrchestrator(sessionId).stop(sessionId)
+}
+
+/**
+ * 停止指定会话中的后台任务。
+ */
+export async function stopAgentTask(input: StopTaskInput): Promise<void> {
+  if (input.type === 'shell') {
+    throw new Error('Shell 后台任务停止暂未接入 runtime 控制')
+  }
+  await getSessionOperationOrchestrator(input.sessionId).stopTask(input.sessionId, input.taskId)
 }
 
 /**
