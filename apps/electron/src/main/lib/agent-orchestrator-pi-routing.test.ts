@@ -735,6 +735,89 @@ describe('AgentOrchestrator pi routing', () => {
     expect(result.completeResultSubtype).toBe('success')
   })
 
+  test('Given pi engine and adaptive thinking enabled When sending message Then passes Pi thinking level to runtime', () => {
+    const output = runOrchestratorScript(`
+      import { mkdirSync, writeFileSync } from 'node:fs'
+      import { join } from 'node:path'
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      const promaDir = join(process.env.HOME, '.proma')
+      mkdirSync(promaDir, { recursive: true })
+      writeFileSync(join(promaDir, 'settings.json'), JSON.stringify({
+        themeMode: 'system',
+        agentThinking: { type: 'adaptive' },
+        agentEffort: 'high',
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+
+      class FakePiAdapter {
+        queryInputs = []
+
+        async *query(input) {
+          this.queryInputs.push(input)
+          yield {
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: 'pi-ok' }] },
+            parent_tool_use_id: null,
+            session_id: input.sessionId,
+          }
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const adapter = new FakePiAdapter()
+      const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
+
+      await orchestrator.sendMessage({
+        sessionId: 'session-pi-thinking-sync',
+        userMessage: 'hello',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        startedAt: 802,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      console.log(JSON.stringify({
+        runtimeThinkingLevels: adapter.queryInputs.map((input) => input.runtimeThinkingLevel ?? null),
+        queryCount: adapter.queryInputs.length,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('runtimeThinkingLevels'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      runtimeThinkingLevels?: Array<string | null>
+      queryCount?: number
+    }
+
+    expect(result.runtimeThinkingLevels).toEqual(['high'])
+    expect(result.queryCount).toBe(1)
+  })
+
   test('Given pi transient deltas When run completes Then persists only final assistant content', () => {
     const output = runOrchestratorScript(`
       import { mock } from 'bun:test'

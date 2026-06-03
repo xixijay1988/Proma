@@ -21,6 +21,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { app } from 'electron'
 import type {
+  AgentEffort,
   AgentSendInput,
   AgentMessage,
   AgentGenerateTitleInput,
@@ -39,6 +40,7 @@ import type {
   AgentRuntimeExtensionUiHandler,
   AgentRuntimeExtensionUiResponse,
   DangerLevel,
+  ThinkingConfig,
 } from '@proma/shared'
 import {
   PROMA_DEFAULT_PERMISSION_MODE,
@@ -735,6 +737,27 @@ function supports1MContext(modelId: string): boolean {
   return false
 }
 
+function mapPromaThinkingToPiLevel(thinking: ThinkingConfig | undefined, effort: AgentEffort | undefined): string | undefined {
+  if (!thinking) return undefined
+  if (thinking.type === 'disabled') return 'off'
+
+  if (thinking.type === 'adaptive') {
+    switch (effort) {
+      case 'low':
+        return 'low'
+      case 'medium':
+        return 'medium'
+      case 'max':
+        return 'xhigh'
+      case 'high':
+      default:
+        return 'high'
+    }
+  }
+
+  return 'high'
+}
+
 /**
  * 聚合一次 SDK 调用涉及的所有附加目录（去重，保持插入顺序）。
  *
@@ -933,6 +956,7 @@ export class AgentOrchestrator {
   ): Promise<void> {
     const { sessionId, userMessage, modelId, workspaceId, additionalDirectories, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds } = input
     const runStartedAt = Date.now()
+    const appSettings = getSettings()
     let agentCwd = homedir()
     let workspace: import('@proma/shared').AgentWorkspace | undefined
     let workspaceSlug: string | undefined
@@ -1132,6 +1156,7 @@ export class AgentOrchestrator {
           ...(piMemoryExtension?.env ?? {}),
           ...(piNanoBananaExtension?.env ?? {}),
         },
+        runtimeThinkingLevel: mapPromaThinkingToPiLevel(appSettings.agentThinking, appSettings.agentEffort),
         abortSignal: piExtensionUiAbortController.signal,
         handleExtensionUiRequest: this.createPiExtensionUiHandler(sessionId, piExtensionUiAbortController.signal),
       })) {

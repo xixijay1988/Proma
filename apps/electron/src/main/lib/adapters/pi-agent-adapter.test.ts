@@ -769,6 +769,72 @@ describe('PiAgentAdapter', () => {
     expect(result.resultSubtype).toBe('success')
   })
 
+  test('Given Pi query with thinking level When query starts Then sends thinking command before prompt', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => {
+            sentCommands.push(command)
+          },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield {
+              type: 'response',
+              id: sentCommands.find((command) => command.type === 'set_thinking_level')?.id,
+              command: 'set_thinking_level',
+              success: true,
+            }
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const messages = []
+
+      for await (const message of adapter.query({
+        sessionId: 'session-pi-thinking-level',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+        runtimeThinkingLevel: 'high',
+      })) {
+        messages.push(message)
+      }
+
+      console.log(JSON.stringify({
+        sentCommands,
+        messageTypes: messages.map((message) => message.type),
+        resultSubtype: messages.at(-1)?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('sentCommands'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{ type?: string; id?: string; level?: string }>
+      messageTypes?: string[]
+      resultSubtype?: string
+    }
+
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['set_thinking_level', 'prompt'])
+    expect(result.sentCommands?.[0]?.id).toStartWith('proma-set-thinking-level-session-pi-thinking-level-')
+    expect(result.sentCommands?.[0]?.level).toBe('high')
+    expect(result.messageTypes).toEqual(['result'])
+    expect(result.resultSubtype).toBe('success')
+  })
+
   test('Given active Pi query When runtime messages are requested Then sends get_messages command', () => {
     const output = runPiAdapterScript(`
       import { mock } from 'bun:test'

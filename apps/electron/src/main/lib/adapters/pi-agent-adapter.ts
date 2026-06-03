@@ -45,8 +45,10 @@ const PI_RUNTIME_COMMANDS = new Set([
   'fork',
   'get_fork_messages',
   'get_messages',
+  'set_thinking_level',
   'switch_session',
 ])
+const PI_THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh'])
 const KNOWN_PI_MESSAGE_UPDATE_EVENT_TYPES = new Set([
   'done',
   'error',
@@ -519,6 +521,14 @@ function createPiCompactMessages(input: {
   ] as unknown as SDKMessage[]
 }
 
+function normalizePiThinkingLevel(level: string): string {
+  const normalized = level.trim()
+  if (!PI_THINKING_LEVELS.has(normalized)) {
+    throw new Error(`[Pi Agent] 不支持的 thinking level: ${level}`)
+  }
+  return normalized
+}
+
 function isExtensionUiDialogMethod(method: string): boolean {
   return method === 'confirm' || method === 'select' || method === 'input' || method === 'editor'
 }
@@ -760,6 +770,13 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     }
 
     try {
+      if (input.runtimeThinkingLevel) {
+        void this.setThinkingLevel(input.sessionId, input.runtimeThinkingLevel).catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error)
+          console.warn(`[Pi Agent] 初始 thinking level 同步失败，继续发送 prompt: ${message}`)
+        })
+      }
+
       piProcess.send({
         id: `proma-prompt-${input.sessionId}-${Date.now()}`,
         type: 'prompt',
@@ -960,6 +977,14 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     )
 
     return createPiCompactMessages({ sessionId, data: response.data })
+  }
+
+  async setThinkingLevel(sessionId: string, level: string): Promise<void> {
+    await this.sendRuntimeCommand(
+      sessionId,
+      { type: 'set_thinking_level', level: normalizePiThinkingLevel(level) },
+      'proma-set-thinking-level',
+    )
   }
 
   dispose(): void {

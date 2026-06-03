@@ -2068,6 +2068,43 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun run typecheck`：通过。
   - `bun run electron:build`：通过，仅既有 Vite chunk-size warning。
 
+## 2026-06-03 Phase J58 Pi thinking level 同步
+
+- 背景：
+  - Proma Agent 输入区已有思考模式开关，Claude SDK 路径会把 `agentThinking` / `agentEffort` 传给 SDK `query()`。
+  - Pi RPC 已暴露 `set_thinking_level`，但 J58 前 Pi 会话没有从 Proma 设置同步 thinking level。
+  - 这会导致同一 UI 设置下，Pi 与 Claude SDK 的推理深度体验不一致。
+- 实现：
+  - `AgentQueryInput` 新增 `runtimeThinkingLevel?: string`。
+  - `AgentProviderAdapter` 新增可选能力 `setThinkingLevel(sessionId, level)`。
+  - `PiAgentAdapter`：
+    - 将 `set_thinking_level` 加入 runtime command response 集合。
+    - 新增 `setThinkingLevel()`，发送 Pi RPC `{ type: 'set_thinking_level', level }`。
+    - 校验 Pi 支持的 level：`off` / `minimal` / `low` / `medium` / `high` / `xhigh`。
+    - `query()` 启动 Pi RPC 后，如果输入带 `runtimeThinkingLevel`，先非阻塞发送 thinking 命令，再发送 prompt，避免在事件流消费前等待 response 导致死锁。
+  - `AgentOrchestrator.runPiSession()`：
+    - 读取 `getSettings()`。
+    - 将 Proma `agentThinking` / `agentEffort` 映射为 Pi level：
+      - `disabled` -> `off`
+      - `adaptive + low|medium|high` -> `low|medium|high`
+      - `adaptive + max` -> `xhigh`
+      - `enabled` -> `high`
+    - 通过 `runtimeThinkingLevel` 传给 Pi adapter。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.94`。
+  - `@proma/shared` patch bump 到 `0.1.49`。
+- 当前边界：
+  - Proma UI 当前主要是 adaptive / disabled 开关；`enabled(budgetTokens)` 在 Pi 中没有等价 token budget，先保守映射为 `high`。
+  - 初始 thinking 同步失败时会打印中文 warning 并继续发送 prompt，避免因为个别模型不支持 thinking 导致整个 Pi 会话不可用。
+  - 运行中动态切换 thinking 的 UI/IPC 尚未接入；J58 只补齐新 turn 启动时的设置同步。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts --test-name-pattern "thinking level" --timeout 30000`：红灯确认等待 response 会超时，实现非阻塞同步后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --test-name-pattern "adaptive thinking enabled" --timeout 30000`：红灯确认未传 runtime thinking level，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --timeout 30000`：51 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-session-manager.test.ts apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/adapters/pi-process.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts apps/electron/src/main/lib/adapters/pi-git-checkpoint-extension.test.ts apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts apps/electron/src/main/lib/adapters/pi-mcp-extension.test.ts apps/electron/src/main/lib/adapters/pi-memory-extension.test.ts apps/electron/src/main/lib/adapters/pi-nano-banana-extension.test.ts apps/electron/src/main/lib/adapters/pi-task-extension.test.ts --timeout 30000`：139 pass / 0 fail。
+  - `bun run typecheck`：通过。
+  - `bun run electron:build`：通过，仅既有 Vite chunk-size warning。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

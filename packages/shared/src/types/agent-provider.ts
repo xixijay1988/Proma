@@ -101,6 +101,8 @@ export interface AgentQueryInput {
   runtimeSkillPaths?: string[]
   /** 传给底层 Runtime 子进程的额外环境变量 */
   runtimeEnv?: Record<string, string | undefined>
+  /** Runtime 原生推理深度（如 Pi RPC 的 thinking level） */
+  runtimeThinkingLevel?: string
   /** 中止信号 */
   abortSignal?: AbortSignal
   /** Runtime 扩展 UI 请求处理器（如 Pi RPC extension UI） */
@@ -135,6 +137,8 @@ export interface AgentProviderAdapter {
   stopShellTask?(sessionId: string, taskId: string): Promise<void>
   /** 压缩活跃 runtime 的会话上下文（可选，仅支持具备原生 compact 的 Provider） */
   compact?(sessionId: string, customInstructions?: string): Promise<SDKMessage[]>
+  /** 动态切换活跃 runtime 的推理深度（可选，仅支持具备 thinking level 的 Provider） */
+  setThinkingLevel?(sessionId: string, level: string): Promise<void>
   /** 动态切换活跃查询的权限模式（可选，仅支持 SDK 原生 setPermissionMode 的 Provider） */
   setPermissionMode?(sessionId: string, mode: string): Promise<void>
   /** 获取活跃 runtime 的原生 fork 候选消息（可选，仅支持具备 session tree 的 Provider） */
