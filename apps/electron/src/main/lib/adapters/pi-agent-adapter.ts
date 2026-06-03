@@ -45,6 +45,7 @@ const KNOWN_PI_RPC_EVENT_TYPES = new Set([
   'turn_start',
 ])
 const PI_RUNTIME_COMMANDS = new Set([
+  'abort',
   'abort_bash',
   'clone',
   'compact',
@@ -1161,6 +1162,14 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     this.processes.delete(sessionId)
     this.clearRetryState(sessionId)
     piProcess.abort()
+  }
+
+  async interruptQuery(sessionId: string): Promise<void> {
+    await this.sendRuntimeCommand(
+      sessionId,
+      { type: 'abort' },
+      'proma-interrupt',
+    )
   }
 
   async sendQueuedMessage(sessionId: string, message: SDKUserMessageInput): Promise<void> {

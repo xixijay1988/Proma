@@ -427,6 +427,81 @@ describe('PiAgentAdapter', () => {
     expect(result.resultSubtype).toBe('success')
   })
 
+  test('Given active Pi query When interrupted softly Then sends abort command without killing RPC session', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+      let killCount = 0
+      let releaseAgentEnd
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'abort') {
+              queueMicrotask(() => releaseAgentEnd({
+                type: 'response',
+                id: command.id,
+                command: 'abort',
+                success: true,
+              }))
+            }
+          },
+          abort: () => {},
+          kill: () => { killCount += 1 },
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield await waitForRelease
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const iterator = adapter.query({
+        sessionId: 'session-pi-soft-interrupt',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })[Symbol.asyncIterator]()
+
+      const firstYield = iterator.next()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      await adapter.interruptQuery('session-pi-soft-interrupt')
+      const resultMessage = await firstYield
+
+      console.log(JSON.stringify({
+        sentCommands,
+        killCountBeforeFinally: killCount,
+        resultType: resultMessage.value?.type,
+        resultSubtype: resultMessage.value?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('sentCommands'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{ type?: string; id?: string }>
+      killCountBeforeFinally?: number
+      resultType?: string
+      resultSubtype?: string
+    }
+
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'abort'])
+    expect(result.sentCommands?.[1]?.id).toStartWith('proma-interrupt-session-pi-soft-interrupt-')
+    expect(result.killCountBeforeFinally).toBe(0)
+    expect(result.resultType).toBe('result')
+    expect(result.resultSubtype).toBe('success')
+  })
+
   test('Given active Pi query When steering mode is changed Then sends set_steering_mode command', () => {
     const output = runPiAdapterScript(`
       import { mock } from 'bun:test'

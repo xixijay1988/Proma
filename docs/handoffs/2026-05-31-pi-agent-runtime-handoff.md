@@ -2622,6 +2622,27 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts`：红灯确认 `updateRuntimeQueueModes` 缺失，实现后 32 pass / 0 fail。
   - `bun run typecheck`：4 个 workspace 全部通过。
 
+## 2026-06-03 Phase J77 Pi soft interrupt parity
+
+- 背景：
+  - Claude SDK adapter 已实现 `interruptQuery()`，Proma 在运行中追加消息且 `interrupt: true` 时，会先软中断当前 turn，再注入 queued user message。
+  - Pi adapter 之前没有 `interruptQuery()`，因此 Pi 会退化为普通 `streamingBehavior: "steer"` 队列，无法表达“先停止当前输出/工具循环，再继续处理新消息”的交互。
+  - Pi RPC 文档提供 `abort` command，用于 abort 当前 agent operation；这可以作为不杀进程的软中断等价能力。
+- 实现：
+  - `PiAgentAdapter`：
+    - 将 `abort` 加入可等待 runtime command 白名单。
+    - 新增 `interruptQuery(sessionId)`，通过 `sendRuntimeCommand({ type: "abort" }, "proma-interrupt")` 发送 Pi RPC abort command 并等待 response。
+    - 保持 `abort(sessionId)` 的硬停止语义不变：`stopAgent` 仍会清理进程并进入 kill 兜底。
+  - `AgentOrchestrator.queueMessage(..., { interrupt: true })` 无需额外改动；现有逻辑会在 Pi adapter 暴露 `interruptQuery()` 后自动先软中断再注入消息。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.113`。
+- 当前边界：
+  - Pi soft interrupt 依赖 Pi RPC `abort` 的语义；它会中止当前 operation，但后续 queued prompt 仍按 Pi 的 prompt/queue 机制处理。
+  - 这不是 `stopAgent`，不会主动删除 Proma active session，也不会走 `piProcess.abort()` 的 kill 兜底。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "interrupted softly|queued message is sent|queued prompt is rejected"`：红灯确认 `interruptQuery` 缺失，实现后 5 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "queueing interrupting message|queueing message|stopping"`：7 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

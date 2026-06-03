@@ -1952,6 +1952,104 @@ describe('AgentOrchestrator pi routing', () => {
     expect(result.persistedTexts).toContain('continue now')
   })
 
+  test('Given pi engine active session When queueing interrupting message Then interrupts before injecting message', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      mock.module('./agent-session-manager.ts', () => ({
+        appendSDKMessages: () => {},
+        getAgentSessionMessages: () => [],
+        getAgentSessionSDKMessages: () => [],
+        truncateSDKMessages: () => {},
+        resolveUserUuidFromSDK: () => undefined,
+        rewindFilesFromSnapshot: () => ({ restoredFiles: [], failedFiles: [] }),
+        createPiNativeRewindSession: () => null,
+        updateAgentSessionMeta: () => {},
+        getAgentSessionMeta: () => undefined,
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+
+      class FakePiAdapter {
+        calls = []
+        release = null
+
+        async *query() {
+          await new Promise((resolve) => { this.release = resolve })
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: 'session-pi-interrupt-queue-orchestrator',
+          }
+        }
+
+        abort() {}
+        dispose() {}
+        async interruptQuery(sessionId) {
+          this.calls.push({ method: 'interruptQuery', sessionId })
+        }
+        async sendQueuedMessage(sessionId, message) {
+          this.calls.push({ method: 'sendQueuedMessage', sessionId, text: message.message.content })
+        }
+      }
+
+      const adapter = new FakePiAdapter()
+      const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
+
+      const runPromise = orchestrator.sendMessage({
+        sessionId: 'session-pi-interrupt-queue-orchestrator',
+        userMessage: 'hello',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        startedAt: 904,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await orchestrator.queueMessage(
+        'session-pi-interrupt-queue-orchestrator',
+        'interrupt and continue',
+        undefined,
+        'queued-pi-interrupt-1',
+        { interrupt: true },
+      )
+
+      adapter.release()
+      await runPromise
+
+      console.log(JSON.stringify({
+        calls: adapter.calls,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('calls'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      calls?: Array<{ method?: string; sessionId?: string; text?: string }>
+    }
+
+    expect(result.calls).toEqual([
+      { method: 'interruptQuery', sessionId: 'session-pi-interrupt-queue-orchestrator' },
+      { method: 'sendQueuedMessage', sessionId: 'session-pi-interrupt-queue-orchestrator', text: 'interrupt and continue' },
+    ])
+  })
+
   test('Given pi engine active session and queued image input When queueing message Then passes images to Pi adapter', () => {
     const output = runOrchestratorScript(`
       import { mock } from 'bun:test'
