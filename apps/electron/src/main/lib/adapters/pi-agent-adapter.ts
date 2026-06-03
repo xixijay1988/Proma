@@ -12,6 +12,7 @@ import type {
   AgentRuntimeState,
   AgentRuntimeSessionStats,
   AgentRuntimeSwitchSessionResult,
+  PromaEvent,
   SDKUserMessageInput,
 } from '@proma/shared'
 import { convertPiTextDelta, convertPiThinkingDelta, convertPiToolStart } from './pi-event-converter'
@@ -181,6 +182,72 @@ function createPiQueueSummaryMessage(input: AgentQueryInput, event: PiRpcEvent):
   } as unknown as SDKMessage
 }
 
+function createPromaEventMessage(input: AgentQueryInput, event: PromaEvent): SDKMessage {
+  return {
+    type: 'system',
+    subtype: 'pi_runtime_event',
+    session_id: input.sessionId,
+    _promaTransient: true,
+    _promaEvent: event,
+  } as unknown as SDKMessage
+}
+
+function createPiAutoRetryMessages(input: AgentQueryInput, event: PiRpcEvent): SDKMessage[] {
+  if (event.type === 'auto_retry_start') {
+    const attempt = getFiniteNumber(event, 'attempt') ?? 1
+    const maxAttempts = getFiniteNumber(event, 'maxAttempts') ?? attempt
+    const delayMs = getFiniteNumber(event, 'delayMs') ?? 0
+    const delaySeconds = delayMs / 1000
+    const reason = getString(event, 'errorMessage') ?? 'Pi auto retry started'
+    const attemptData = {
+      attempt,
+      timestamp: Date.now(),
+      reason,
+      errorMessage: reason,
+      delaySeconds,
+    }
+
+    return [
+      createPromaEventMessage(input, {
+        type: 'retry',
+        status: 'starting',
+        attempt,
+        maxAttempts,
+        delaySeconds,
+        reason,
+      }),
+      createPromaEventMessage(input, {
+        type: 'retry',
+        status: 'attempt',
+        attemptData,
+      }),
+    ]
+  }
+
+  if (event.type === 'auto_retry_end') {
+    if (event.success === true) {
+      return [createPromaEventMessage(input, { type: 'retry', status: 'cleared' })]
+    }
+
+    const attempt = getFiniteNumber(event, 'attempt') ?? 1
+    const finalError = getString(event, 'finalError') ?? 'Pi auto retry failed'
+
+    return [createPromaEventMessage(input, {
+      type: 'retry',
+      status: 'failed',
+      attemptData: {
+        attempt,
+        timestamp: Date.now(),
+        reason: finalError,
+        errorMessage: finalError,
+        delaySeconds: 0,
+      },
+    })]
+  }
+
+  return []
+}
+
 function createSuccessResultMessage(input: AgentQueryInput): SDKMessage {
   return {
     type: 'result',
@@ -313,6 +380,11 @@ function getString(record: Record<string, unknown>, key: string): string | null 
 function getBoolean(record: Record<string, unknown>, key: string): boolean | null {
   const value = record[key]
   return typeof value === 'boolean' ? value : null
+}
+
+function getFiniteNumber(record: Record<string, unknown>, key: string): number | null {
+  const value = record[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
 function getRecord(record: Record<string, unknown>, key: string): Record<string, unknown> | null {
@@ -665,6 +737,9 @@ function createExtensionUiResponse(
 }
 
 function convertPiRpcEvent(input: AgentQueryInput, event: PiRpcEvent): SDKMessage[] {
+  const retryMessages = createPiAutoRetryMessages(input, event)
+  if (retryMessages.length > 0) return retryMessages
+
   if (event.type === 'message_update') {
     const assistantMessageEvent = asRecord(event.assistantMessageEvent)
     if (assistantMessageEvent?.type === 'text_delta') {

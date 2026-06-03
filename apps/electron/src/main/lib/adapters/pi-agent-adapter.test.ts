@@ -1094,6 +1094,186 @@ describe('PiAgentAdapter', () => {
     expect(result.resultSubtype).toBe('success')
   })
 
+  test('Given Pi auto retry lifecycle events When query runs Then yields Proma retry events', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: () => {},
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield {
+              type: 'auto_retry_start',
+              attempt: 2,
+              maxAttempts: 5,
+              delayMs: 1500,
+              errorMessage: 'provider timeout',
+            }
+            yield {
+              type: 'auto_retry_end',
+              success: true,
+              attempt: 2,
+            }
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const messages = []
+
+      for await (const message of adapter.query({
+        sessionId: 'session-pi-auto-retry-events',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })) {
+        messages.push(message)
+      }
+
+      const retryEvents = messages
+        .map((message) => message._promaEvent ?? null)
+        .filter((event) => event?.type === 'retry')
+
+      console.log(JSON.stringify({
+        retryEvents,
+        transientFlags: messages
+          .filter((message) => message._promaEvent)
+          .map((message) => message._promaTransient === true),
+        messageTypes: messages.map((message) => message.type),
+        resultSubtype: messages.at(-1)?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('retryEvents'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      retryEvents?: Array<{
+        type?: string
+        status?: string
+        attempt?: number
+        maxAttempts?: number
+        delaySeconds?: number
+        reason?: string
+        attemptData?: {
+          attempt?: number
+          reason?: string
+          errorMessage?: string
+          delaySeconds?: number
+        }
+      }>
+      transientFlags?: boolean[]
+      messageTypes?: string[]
+      resultSubtype?: string
+    }
+
+    expect(result.retryEvents?.map((event) => event.status)).toEqual(['starting', 'attempt', 'cleared'])
+    expect(result.retryEvents?.[0]).toMatchObject({
+      type: 'retry',
+      status: 'starting',
+      attempt: 2,
+      maxAttempts: 5,
+      delaySeconds: 1.5,
+      reason: 'provider timeout',
+    })
+    expect(result.retryEvents?.[1]?.attemptData).toMatchObject({
+      attempt: 2,
+      reason: 'provider timeout',
+      errorMessage: 'provider timeout',
+      delaySeconds: 1.5,
+    })
+    expect(result.transientFlags).toEqual([true, true, true])
+    expect(result.messageTypes?.at(-1)).toBe('result')
+    expect(result.resultSubtype).toBe('success')
+  })
+
+  test('Given Pi auto retry fails When query runs Then yields Proma retry failed event', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: () => {},
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield {
+              type: 'auto_retry_end',
+              success: false,
+              attempt: 3,
+              finalError: 'quota exhausted',
+            }
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const messages = []
+
+      for await (const message of adapter.query({
+        sessionId: 'session-pi-auto-retry-failed-event',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })) {
+        messages.push(message)
+      }
+
+      const retryEvents = messages
+        .map((message) => message._promaEvent ?? null)
+        .filter((event) => event?.type === 'retry')
+
+      console.log(JSON.stringify({
+        retryEvents,
+        transientFlags: messages
+          .filter((message) => message._promaEvent)
+          .map((message) => message._promaTransient === true),
+        resultSubtype: messages.at(-1)?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('retryEvents'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      retryEvents?: Array<{
+        status?: string
+        attemptData?: {
+          attempt?: number
+          reason?: string
+          errorMessage?: string
+          delaySeconds?: number
+        }
+      }>
+      transientFlags?: boolean[]
+      resultSubtype?: string
+    }
+
+    expect(result.retryEvents?.map((event) => event.status)).toEqual(['failed'])
+    expect(result.retryEvents?.[0]?.attemptData).toMatchObject({
+      attempt: 3,
+      reason: 'quota exhausted',
+      errorMessage: 'quota exhausted',
+      delaySeconds: 0,
+    })
+    expect(result.transientFlags).toEqual([true])
+    expect(result.resultSubtype).toBe('success')
+  })
+
   test('Given active Pi query When runtime messages are requested Then sends get_messages command', () => {
     const output = runPiAdapterScript(`
       import { mock } from 'bun:test'

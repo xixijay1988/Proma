@@ -42,6 +42,7 @@ import type {
   AgentRuntimeState,
   DangerLevel,
   ThinkingConfig,
+  PromaEvent,
 } from '@proma/shared'
 import {
   PROMA_DEFAULT_PERMISSION_MODE,
@@ -139,6 +140,17 @@ function extractFirstAskUserAnswer(updatedInput: Record<string, unknown> | undef
   }
 
   return null
+}
+
+function extractTransientPromaEvent(message: SDKMessage): PromaEvent | null {
+  const record = message as Record<string, unknown>
+  if (record._promaTransient !== true) return null
+
+  const event = record._promaEvent
+  if (!event || typeof event !== 'object') return null
+
+  const eventRecord = event as Record<string, unknown>
+  return typeof eventRecord.type === 'string' ? event as PromaEvent : null
 }
 
 interface PiStructuredPermissionRequest {
@@ -1173,6 +1185,12 @@ export class AgentOrchestrator {
         }
 
         const msgRecord = msg as Record<string, unknown>
+        const promaEvent = extractTransientPromaEvent(msg)
+        if (promaEvent) {
+          this.eventBus.emit(sessionId, { kind: 'proma_event', event: promaEvent })
+          continue
+        }
+
         if ((msg.type === 'assistant' || msg.type === 'result') && msgRecord._promaTransient !== true) {
           accumulatedMessages.push(msg)
         }

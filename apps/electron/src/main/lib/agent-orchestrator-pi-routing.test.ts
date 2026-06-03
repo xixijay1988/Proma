@@ -1213,6 +1213,122 @@ describe('AgentOrchestrator pi routing', () => {
     expect(result.hasTransient).toBe(false)
   })
 
+  test('Given pi adapter emits Proma retry events When run completes Then forwards without persisting transient messages', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+      const { getAgentSessionSDKMessages } = await import('./agent-session-manager.ts')
+
+      class FakePiAdapter {
+        async *query(input) {
+          yield {
+            type: 'system',
+            subtype: 'pi_retry_event',
+            session_id: input.sessionId,
+            _promaTransient: true,
+            _promaEvent: {
+              type: 'retry',
+              status: 'starting',
+              attempt: 1,
+              maxAttempts: 3,
+              delaySeconds: 2,
+              reason: 'provider timeout',
+            },
+          }
+          yield {
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: 'pi recovered' }] },
+            parent_tool_use_id: null,
+            session_id: input.sessionId,
+          }
+          yield {
+            type: 'system',
+            subtype: 'pi_retry_event',
+            session_id: input.sessionId,
+            _promaTransient: true,
+            _promaEvent: { type: 'retry', status: 'cleared' },
+          }
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const eventBus = new AgentEventBus()
+      const forwardedRetryEvents = []
+      const forwardedSdkSubtypes = []
+      eventBus.use((_sessionId, payload, next) => {
+        if (payload.kind === 'proma_event' && payload.event.type === 'retry') {
+          forwardedRetryEvents.push(payload.event)
+        }
+        if (payload.kind === 'sdk_message') {
+          forwardedSdkSubtypes.push(payload.message.subtype ?? payload.message.type)
+        }
+        next()
+      })
+
+      const orchestrator = new AgentOrchestrator(new FakePiAdapter(), eventBus, 'pi')
+
+      await orchestrator.sendMessage({
+        sessionId: 'session-pi-retry-event-forward',
+        userMessage: 'hello',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        startedAt: 457,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      const messages = getAgentSessionSDKMessages('session-pi-retry-event-forward')
+
+      console.log(JSON.stringify({
+        forwardedRetryEvents,
+        forwardedSdkSubtypes,
+        persistedCount: messages.length,
+        hasRetrySystemMessage: messages.some((message) => message.subtype === 'pi_retry_event'),
+        hasTransient: messages.some((message) => message._promaTransient === true),
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('forwardedRetryEvents'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      forwardedRetryEvents?: Array<{ type?: string; status?: string; reason?: string }>
+      forwardedSdkSubtypes?: string[]
+      persistedCount?: number
+      hasRetrySystemMessage?: boolean
+      hasTransient?: boolean
+    }
+
+    expect(result.forwardedRetryEvents?.map((event) => event.status)).toEqual(['starting', 'cleared'])
+    expect(result.forwardedRetryEvents?.[0]?.reason).toBe('provider timeout')
+    expect(result.forwardedSdkSubtypes).toEqual(['assistant', 'success'])
+    expect(result.persistedCount).toBe(3)
+    expect(result.hasRetrySystemMessage).toBe(false)
+    expect(result.hasTransient).toBe(false)
+  })
+
   test('Given pi extension confirm request When user allows permission Then returns confirmed response', () => {
     const output = runOrchestratorScript(`
       import { mock } from 'bun:test'

@@ -2260,6 +2260,38 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --test-name-pattern "auto retry" --timeout 30000`：红灯确认未传 `runtimeAutoRetryEnabled`，实现后 1 pass / 0 fail。
   - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --timeout 30000`：58 pass / 0 fail。
 
+## 2026-06-03 Phase J64 Pi auto retry lifecycle stream bridge
+
+- 背景：
+  - J63 已默认启用 Pi runtime auto retry，但 Pi 原生 `auto_retry_start` / `auto_retry_end` 生命周期事件仍只被 adapter 识别后跳过。
+  - Proma Claude SDK 路径已有统一 `retry` stream event，renderer 全局监听会转换成 `retrying` / `retry_attempt` / `retry_cleared` / `retry_failed` 状态。
+  - J64 将 Pi retry lifecycle 接入同一条 Proma 事件流，复用现有重试 UI，不新增 renderer 专属分支。
+- 实现：
+  - `PiAgentAdapter`：
+    - `auto_retry_start` 转为两个瞬态 `_promaEvent`：
+      - `retry starting`，包含 `attempt` / `maxAttempts` / `delaySeconds` / `reason`。
+      - `retry attempt`，包含 `RetryAttempt` 详情。
+    - `auto_retry_end success=true` 转为 `retry cleared`。
+    - `auto_retry_end success=false` 转为 `retry failed`，包含最终失败 attempt。
+    - 这些消息使用 `_promaTransient: true` 与 `subtype: "pi_runtime_event"`，不代表真实 assistant/result 输出。
+  - `AgentOrchestrator.runPiSession()`：
+    - 在 Pi adapter 消息进入普通 SDK emit / persistence 之前识别瞬态 `_promaEvent`。
+    - 转发为 `{ kind: "proma_event", event }`，并跳过 SDK 消息发送与 JSONL 持久化。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.100`。
+- 当前边界：
+  - J64 只桥接 runtime 生命周期事件，不新增"取消重试"按钮；`abortRetry()` adapter 能力仍等待 renderer IPC/UI 接入。
+  - `_promaEvent` 是 Proma 内部瞬态字段，没有扩展 shared `SDKMessage` 公共结构。
+  - Pi runtime 若未实际发出 auto retry 生命周期事件，UI 不会显示重试状态。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts --test-name-pattern "auto retry lifecycle" --timeout 30000`：红灯确认未产出 retry event，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --test-name-pattern "Proma retry events" --timeout 30000`：红灯确认未转发 `proma_event`，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts --test-name-pattern "auto retry" --timeout 30000`：3 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-session-manager.test.ts apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/adapters/pi-process.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts apps/electron/src/main/lib/adapters/pi-git-checkpoint-extension.test.ts apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts apps/electron/src/main/lib/adapters/pi-mcp-extension.test.ts apps/electron/src/main/lib/adapters/pi-memory-extension.test.ts apps/electron/src/main/lib/adapters/pi-nano-banana-extension.test.ts apps/electron/src/main/lib/adapters/pi-task-extension.test.ts --timeout 30000`：149 pass / 0 fail。
+  - `bun run typecheck`：4 个 workspace 包 typecheck 均 exit 0。
+  - `bun run electron:build`：Electron build exit 0；保留既有 Vite large chunk warning。
+  - `git diff --check`：无 whitespace 问题。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。
