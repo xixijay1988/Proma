@@ -1159,6 +1159,7 @@ export class AgentOrchestrator {
         },
         runtimeThinkingLevel: mapPromaThinkingToPiLevel(appSettings.agentThinking, appSettings.agentEffort),
         runtimeAutoCompactionEnabled: true,
+        runtimeAutoRetryEnabled: true,
         abortSignal: piExtensionUiAbortController.signal,
         handleExtensionUiRequest: this.createPiExtensionUiHandler(sessionId, piExtensionUiAbortController.signal),
       })) {

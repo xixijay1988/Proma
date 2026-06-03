@@ -952,6 +952,148 @@ describe('PiAgentAdapter', () => {
     expect(result.resultSubtype).toBe('success')
   })
 
+  test('Given Pi query with auto retry enabled When query starts Then sends auto retry command before prompt', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => {
+            sentCommands.push(command)
+          },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield {
+              type: 'response',
+              id: sentCommands.find((command) => command.type === 'set_auto_retry')?.id,
+              command: 'set_auto_retry',
+              success: true,
+            }
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const messages = []
+
+      for await (const message of adapter.query({
+        sessionId: 'session-pi-auto-retry',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+        runtimeAutoRetryEnabled: true,
+      })) {
+        messages.push(message)
+      }
+
+      console.log(JSON.stringify({
+        sentCommands,
+        messageTypes: messages.map((message) => message.type),
+        resultSubtype: messages.at(-1)?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('sentCommands'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{ type?: string; id?: string; enabled?: boolean }>
+      messageTypes?: string[]
+      resultSubtype?: string
+    }
+
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['set_auto_retry', 'prompt'])
+    expect(result.sentCommands?.[0]?.id).toStartWith('proma-set-auto-retry-session-pi-auto-retry-')
+    expect(result.sentCommands?.[0]?.enabled).toBe(true)
+    expect(result.messageTypes).toEqual(['result'])
+    expect(result.resultSubtype).toBe('success')
+  })
+
+  test('Given active Pi query When retry is aborted Then sends abort_retry command', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+      let releaseAgentEnd
+      let releaseResponse
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+      const waitForResponse = new Promise((resolve) => { releaseResponse = resolve })
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'abort_retry') {
+              queueMicrotask(() => releaseResponse({
+                type: 'response',
+                id: command.id,
+                command: 'abort_retry',
+                success: true,
+              }))
+            }
+          },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            const response = await waitForResponse
+            yield response
+            await waitForRelease
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const iterator = adapter.query({
+        sessionId: 'session-pi-abort-retry',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })[Symbol.asyncIterator]()
+
+      const firstYield = iterator.next()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      await adapter.abortRetry('session-pi-abort-retry')
+      releaseAgentEnd()
+      const resultMessage = await firstYield
+
+      console.log(JSON.stringify({
+        sentCommands,
+        resultType: resultMessage.value?.type,
+        resultSubtype: resultMessage.value?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('sentCommands'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{ type?: string; id?: string }>
+      resultType?: string
+      resultSubtype?: string
+    }
+
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'abort_retry'])
+    expect(result.sentCommands?.[1]?.id).toStartWith('proma-abort-retry-session-pi-abort-retry-')
+    expect(result.resultType).toBe('result')
+    expect(result.resultSubtype).toBe('success')
+  })
+
   test('Given active Pi query When runtime messages are requested Then sends get_messages command', () => {
     const output = runPiAdapterScript(`
       import { mock } from 'bun:test'

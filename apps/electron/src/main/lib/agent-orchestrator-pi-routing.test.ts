@@ -891,6 +891,79 @@ describe('AgentOrchestrator pi routing', () => {
     expect(result.queryCount).toBe(1)
   })
 
+  test('Given pi engine When sending message Then enables Pi auto retry for the runtime', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+
+      class FakePiAdapter {
+        queryInputs = []
+
+        async *query(input) {
+          this.queryInputs.push(input)
+          yield {
+            type: 'assistant',
+            message: { content: [{ type: 'text', text: 'pi-ok' }] },
+            parent_tool_use_id: null,
+            session_id: input.sessionId,
+          }
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const adapter = new FakePiAdapter()
+      const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
+
+      await orchestrator.sendMessage({
+        sessionId: 'session-pi-auto-retry-sync',
+        userMessage: 'hello',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        startedAt: 805,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      console.log(JSON.stringify({
+        autoRetryFlags: adapter.queryInputs.map((input) => input.runtimeAutoRetryEnabled ?? null),
+        queryCount: adapter.queryInputs.length,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('autoRetryFlags'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      autoRetryFlags?: Array<boolean | null>
+      queryCount?: number
+    }
+
+    expect(result.autoRetryFlags).toEqual([true])
+    expect(result.queryCount).toBe(1)
+  })
+
   test('Given active pi session When runtime state is requested Then delegates to adapter getRuntimeState', () => {
     const output = runOrchestratorScript(`
       import { mock } from 'bun:test'

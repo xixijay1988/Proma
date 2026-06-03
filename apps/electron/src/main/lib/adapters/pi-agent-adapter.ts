@@ -51,7 +51,9 @@ const PI_RUNTIME_COMMANDS = new Set([
   'get_messages',
   'get_session_stats',
   'get_state',
+  'abort_retry',
   'set_auto_compaction',
+  'set_auto_retry',
   'set_thinking_level',
   'switch_session',
 ])
@@ -896,6 +898,13 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         })
       }
 
+      if (typeof input.runtimeAutoRetryEnabled === 'boolean') {
+        void this.setAutoRetry(input.sessionId, input.runtimeAutoRetryEnabled).catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error)
+          console.warn(`[Pi Agent] 初始自动重试设置同步失败，继续发送 prompt: ${message}`)
+        })
+      }
+
       piProcess.send({
         id: `proma-prompt-${input.sessionId}-${Date.now()}`,
         type: 'prompt',
@@ -1126,6 +1135,22 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       sessionId,
       { type: 'set_auto_compaction', enabled },
       'proma-set-auto-compaction',
+    )
+  }
+
+  async setAutoRetry(sessionId: string, enabled: boolean): Promise<void> {
+    await this.sendRuntimeCommand(
+      sessionId,
+      { type: 'set_auto_retry', enabled },
+      'proma-set-auto-retry',
+    )
+  }
+
+  async abortRetry(sessionId: string): Promise<void> {
+    await this.sendRuntimeCommand(
+      sessionId,
+      { type: 'abort_retry' },
+      'proma-abort-retry',
     )
   }
 

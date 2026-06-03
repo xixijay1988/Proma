@@ -2230,6 +2230,36 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --test-name-pattern "auto compaction" --timeout 30000`：红灯确认未传 `runtimeAutoCompactionEnabled`，实现后 1 pass / 0 fail。
   - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --timeout 30000`：55 pass / 0 fail。
 
+## 2026-06-03 Phase J63 Pi auto retry runtime sync
+
+- 背景：
+  - Pi RPC 原生支持 `set_auto_retry` 与 `abort_retry`，可把 provider / runtime 失败后的自动重试交给 Pi runtime。
+  - Proma Claude SDK 路径已有错误重试事件与 UI 状态；Pi 路径此前只靠 Proma 外层最小循环，没有暴露 Pi 原生 retry 控制。
+  - J63 先补齐 runtime 能力边界：默认启用 Pi auto retry，并提供 abort retry adapter 能力，后续可接入 UI 的"取消重试"操作。
+- 实现：
+  - `AgentQueryInput` 新增 `runtimeAutoRetryEnabled?: boolean`。
+  - `AgentProviderAdapter` 新增可选能力：
+    - `setAutoRetry(sessionId, enabled)`
+    - `abortRetry(sessionId)`
+  - `PiAgentAdapter`：
+    - 将 `set_auto_retry` / `abort_retry` 加入 runtime command response 集合。
+    - 新增 `setAutoRetry()` 与 `abortRetry()`。
+    - `query()` 启动后、prompt 发送前，如果输入带 `runtimeAutoRetryEnabled`，非阻塞发送自动重试设置。
+  - `AgentOrchestrator.runPiSession()`：
+    - 对 Pi runtime query 传入 `runtimeAutoRetryEnabled: true`。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.99`。
+  - `@proma/shared` patch bump 到 `0.1.54`。
+- 当前边界：
+  - J63 暂未新增 renderer IPC / UI 来触发 `abortRetry()`。
+  - Pi runtime 的 auto retry 生命周期事件目前仍只作为已知 lifecycle event 跳过；后续可转换为 Proma `retry` stream event，复用现有 RetryingNotice。
+  - 如果 Pi runtime 不支持或同步失败，会打印中文 warning 并继续发送 prompt。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts --test-name-pattern "auto retry" --timeout 30000`：红灯确认未发送 `set_auto_retry`，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts --test-name-pattern "retry is aborted" --timeout 30000`：红灯确认 `abortRetry is not a function`，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --test-name-pattern "auto retry" --timeout 30000`：红灯确认未传 `runtimeAutoRetryEnabled`，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --timeout 30000`：58 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。
