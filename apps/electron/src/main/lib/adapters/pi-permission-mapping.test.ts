@@ -108,8 +108,9 @@ describe('pi permission mapping', () => {
     })
 
     expect(source).toContain("pi.on('tool_call'")
+    expect(source).toContain("pi.registerCommand('proma-permission-mode'")
     expect(source).toContain('Proma Pi 权限确认')
-    expect(source).toContain('const PI_PERMISSION_MODE = "ask"')
+    expect(source).toContain('let currentPermissionMode = "ask"')
     expect(source).toContain('"/tmp/workspace"')
     expect(source).toContain('"/tmp/attached"')
   })
@@ -120,12 +121,24 @@ describe('pi permission mapping', () => {
       allowedDirectories: ['/tmp/workspace'],
     })
 
-    const allowAllIndex = source.indexOf("if (PI_PERMISSION_MODE === 'allow-all') return undefined")
+    const allowAllIndex = source.indexOf("if (currentPermissionMode === 'allow-all') return undefined")
     const pathGuardIndex = source.indexOf('if (pathValue && !isPathAllowed(pathValue))')
 
     expect(allowAllIndex).toBeGreaterThan(-1)
     expect(pathGuardIndex).toBeGreaterThan(-1)
     expect(allowAllIndex).toBeLessThan(pathGuardIndex)
+  })
+
+  test('Given permission extension source When generated Then exposes internal command for dynamic mode switching', () => {
+    const source = buildPiPermissionExtensionSourceForTest({
+      piMode: 'ask',
+      allowedDirectories: ['/tmp/workspace'],
+    })
+
+    expect(source).toContain("const VALID_PERMISSION_MODES = new Set(['safe', 'ask', 'allow-all'])")
+    expect(source).toContain("pi.registerCommand('proma-permission-mode'")
+    expect(source).toContain('currentPermissionMode = requestedMode')
+    expect(source).toContain("ctx.ui.notify('Proma Pi 权限模式已切换: ' + currentPermissionMode, 'info')")
   })
 
   test('Given permission extension source When MCP tool requested Then generated description names the MCP server and tool', () => {

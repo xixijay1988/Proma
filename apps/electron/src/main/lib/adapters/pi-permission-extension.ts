@@ -24,8 +24,9 @@ function buildPiPermissionExtensionSource(input: {
   piMode: string
   allowedDirectories: string[]
 }): string {
-  return `const PI_PERMISSION_MODE = ${serializeExtensionValue(input.piMode)}
+  return `let currentPermissionMode = ${serializeExtensionValue(input.piMode)}
 const ALLOWED_DIRECTORIES = ${serializeExtensionValue(input.allowedDirectories)}
+const VALID_PERMISSION_MODES = new Set(['safe', 'ask', 'allow-all'])
 
 function normalizeToolName(toolName) {
   return String(toolName || '').replace(/[\\s_-]/g, '').toLowerCase()
@@ -104,7 +105,7 @@ function mapToolPermission(toolName, input) {
   const writeTools = new Set(['edit', 'multiedit', 'notebookedit', 'write'])
   const shellTools = new Set(['bash', 'shell'])
 
-  if (PI_PERMISSION_MODE === 'allow-all') return { behavior: 'allow', dangerLevel: 'normal' }
+  if (currentPermissionMode === 'allow-all') return { behavior: 'allow', dangerLevel: 'normal' }
   if (rawTool.startsWith('mcp__') && rawTool.endsWith('__list_tools')) return { behavior: 'allow', dangerLevel: 'safe' }
   const mcpRiskHint = getGlobalMcpToolRiskHint(rawTool, input)
   if (mcpRiskHint?.risk === 'read') return { behavior: 'allow', dangerLevel: 'safe' }
@@ -135,12 +136,25 @@ function formatDescription(toolName, input) {
 }
 
 export default function (pi) {
+  pi.registerCommand('proma-permission-mode', {
+    description: 'Internal Proma command: update Pi permission mode for this runtime.',
+    handler: async (args, ctx) => {
+      const requestedMode = String(args || '').trim()
+      if (!VALID_PERMISSION_MODES.has(requestedMode)) {
+        ctx.ui.notify('Proma Pi 权限模式无效: ' + requestedMode, 'error')
+        return
+      }
+      currentPermissionMode = requestedMode
+      ctx.ui.notify('Proma Pi 权限模式已切换: ' + currentPermissionMode, 'info')
+    },
+  })
+
   pi.on('tool_call', async (event, ctx) => {
     const input = event.input && typeof event.input === 'object' ? event.input : {}
     const toolName = String(event.toolName || '')
     const pathValue = getToolPath(toolName, input)
 
-    if (PI_PERMISSION_MODE === 'allow-all') return undefined
+    if (currentPermissionMode === 'allow-all') return undefined
 
     if (pathValue && !isPathAllowed(pathValue)) {
       return { block: true, reason: 'Proma 已阻止 Pi 访问工作区允许范围之外的路径: ' + pathValue }
@@ -160,7 +174,7 @@ export default function (pi) {
       description: formatDescription(toolName, input),
       command: typeof input.command === 'string' ? input.command : undefined,
       dangerLevel: decision.dangerLevel,
-      piPermissionMode: PI_PERMISSION_MODE,
+      piPermissionMode: currentPermissionMode,
       toolCallId: event.toolCallId,
     })
     const confirmed = await ctx.ui.confirm('Proma Pi 权限确认', payload)

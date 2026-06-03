@@ -276,6 +276,74 @@ describe('PiAgentAdapter', () => {
     expect(result.resultSubtype).toBe('success')
   })
 
+  test('Given active Pi query When permission mode changes Then sends internal permission command', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+      let releaseAgentEnd
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'prompt' && command.message?.startsWith('/proma-permission-mode ')) {
+              queueMicrotask(() => releaseAgentEnd({
+                type: 'response',
+                id: command.id,
+                command: 'prompt',
+                success: true,
+              }))
+            }
+          },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield await waitForRelease
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const iterator = adapter.query({
+        sessionId: 'session-pi-permission-mode',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })[Symbol.asyncIterator]()
+
+      const firstYield = iterator.next()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      await adapter.setPermissionMode('session-pi-permission-mode', 'bypassPermissions')
+      await firstYield
+
+      console.log(JSON.stringify({
+        permissionCommand: sentCommands.find((command) => command.type === 'prompt' && command.message?.startsWith('/proma-permission-mode ')),
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('permissionCommand'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      permissionCommand?: { type?: string; message?: string; streamingBehavior?: string }
+    }
+
+    expect(result.permissionCommand).toMatchObject({
+      type: 'prompt',
+      message: '/proma-permission-mode allow-all',
+      streamingBehavior: 'steer',
+    })
+  })
+
   test('Given active Pi query When queued message is sent Then steers current RPC session', () => {
     const output = runPiAdapterScript(`
       import { mock } from 'bun:test'

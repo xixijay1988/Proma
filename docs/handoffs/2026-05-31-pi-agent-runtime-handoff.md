@@ -2563,6 +2563,32 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun run typecheck`：4 个 workspace 全部通过。
   - `bun run electron:build`：通过；仅保留既有 Vite large chunk warning。
 
+## 2026-06-03 Phase J75 Pi runtime permission mode switching parity
+
+- 背景：
+  - Claude SDK adapter 已支持运行中 `query.setPermissionMode()`，Proma 的 `updateSessionPermissionMode()` 会在会话活跃时同步通知 adapter。
+  - Pi 权限体验由 Proma 生成的 permission extension 实现；J75 前该 extension 的 `PI_PERMISSION_MODE` 是启动时常量。
+  - 这会导致用户在 Pi 会话运行中切到“完全访问”后，Proma 外层状态已变化，但 Pi runtime 内部权限桥仍可能按旧模式继续弹审批。
+- 实现：
+  - `Pi permission extension`：
+    - 将权限模式从常量改为 `currentPermissionMode` 可变状态。
+    - 注册内部 extension command `/proma-permission-mode <safe|ask|allow-all>`。
+    - 工具预检和权限请求 payload 均读取最新 `currentPermissionMode`。
+  - `PiAgentAdapter.setPermissionMode()`：
+    - 复用 `mapPromaPermissionModeToPiMode()` 将 Proma `bypassPermissions` / `auto` / `plan` 映射到 Pi `allow-all` / `ask` / `safe`。
+    - 通过 Pi RPC `prompt` 发送内部命令，并设置 `streamingBehavior: "steer"`，让运行中切换也能立即被 extension command 处理。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.111`。
+- 当前边界：
+  - Pi 仍没有内置 permission mode；这是 Proma permission extension 层的 parity。
+  - `allow-all` 仍会绕过 Proma extension 的目录 guard，与 Proma “完全访问”语义一致；真实文件系统边界仍取决于宿主运行环境。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts -t "dynamic mode switching|embeds mode|bypasses path" --timeout 30000`：红灯确认旧 extension 无动态命令，实现后 3 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "permission mode changes" --timeout 30000`：红灯确认 `setPermissionMode` 缺失，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts --timeout 30000`：96 pass / 0 fail。
+  - `bun run --filter='@proma/electron' typecheck`：通过。
+  - `git diff --check`：通过。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

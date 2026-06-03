@@ -13,9 +13,11 @@ import type {
   AgentRuntimeSessionStats,
   AgentRuntimeSwitchSessionResult,
   PromaEvent,
+  PromaPermissionMode,
   SDKUserMessageInput,
 } from '@proma/shared'
 import { convertPiTextDelta, convertPiThinkingDelta, convertPiToolStart } from './pi-event-converter'
+import { mapPromaPermissionModeToPiMode } from './pi-permission-mapping'
 import { startPiRpcSession, type PiRpcCommand, type PiRpcEvent, type StartedPiRpcSession } from './pi-process'
 
 const PI_UNSUPPORTED_MESSAGE = 'Pi 进程集成尚未在此构建中实现或启用。'
@@ -1313,6 +1315,20 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       { type: 'set_thinking_level', level: normalizePiThinkingLevel(level) },
       'proma-set-thinking-level',
     )
+  }
+
+  async setPermissionMode(sessionId: string, mode: string): Promise<void> {
+    const piMode = mapPromaPermissionModeToPiMode(mode as PromaPermissionMode)
+    await this.sendRuntimeCommand(
+      sessionId,
+      {
+        type: 'prompt',
+        message: `/proma-permission-mode ${piMode}`,
+        streamingBehavior: 'steer',
+      },
+      'proma-set-permission-mode',
+    )
+    console.log(`[Pi Agent] 权限模式已切换: sessionId=${sessionId}, mode=${mode}, piMode=${piMode}`)
   }
 
   dispose(): void {
