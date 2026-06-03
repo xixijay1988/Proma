@@ -2914,6 +2914,36 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts -t "write risk hint"`：红灯确认缺少 risk hint 描述，实施后 1 pass / 0 fail。
   - `bun test apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts`：24 pass / 0 fail。
 
+## 2026-06-03 Phase J89 Structured Pi MCP permission risk hints
+
+- 背景：
+  - J88 已把 Pi MCP 风险提示追加到 confirm description，但 Renderer 仍需要解析自然语言才能区分只读、可能写入远端、风险未知。
+  - 为了继续对齐 Claude Agent SDK 权限体验，需要把 Pi MCP 风险判断作为稳定结构化字段传递到 `PermissionRequest`。
+- 实现：
+  - `@proma/shared`：
+    - 新增 `PiMcpPermissionRiskHint`，包含 `risk: "read" | "write" | "unknown"`，以及可选 `server` / `toolName` / `description`。
+    - `PermissionRequest` 新增可选 `mcpRiskHint`。
+  - `pi-permission-extension.ts`：
+    - 新增 `getPermissionRiskHint(toolName, input)`，从 Pi MCP bridge 发布的 global risk hints 中清洗出结构化字段。
+    - confirm payload 增加 `mcpRiskHint`，同时保留 J88 的中文描述提示。
+  - `agent-orchestrator.ts`：
+    - 解析 Pi structured permission request 时校验并透传 `mcpRiskHint`。
+  - Renderer：
+    - 新增 `permission-risk-ui.ts`，把结构化 hint 映射为审批横幅 badge。
+    - `PermissionBanner` 在工具名旁显示 `只读 MCP` / `可能修改远端` / `风险未知`，tooltip 显示 MCP server/tool 或描述。
+- 版本：
+  - `@proma/shared` patch bump 到 `0.1.65`。
+  - `@proma/electron` patch bump 到 `0.10.125`。
+- 当前边界：
+  - 这是权限展示与数据契约 parity，不改变 Pi MCP allow/ask 决策。
+  - allow-all 仍按当前 Pi permission extension 行为直接放行，不显示审批横幅。
+  - 后续可以继续把同一结构化风险字段用于权限历史、后台任务摘要或 MCP/Skills 能力边界说明。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts -t "structured hint"`：红灯确认缺少结构化字段，实施后 1 pass / 0 fail。
+  - `bun test apps/electron/src/renderer/components/agent/permission-risk-ui.test.ts`：红灯确认 helper 缺失，实施后 4 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts`：25 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "Pi MCP permission request"`：1 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

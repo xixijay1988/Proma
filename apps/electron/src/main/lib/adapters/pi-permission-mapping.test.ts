@@ -196,6 +196,17 @@ describe('pi permission mapping', () => {
     expect(source).toContain('description: formatPermissionDescription(toolName, input, decision)')
   })
 
+  test('Given permission extension source When MCP risk hint exists Then confirm payload includes structured hint', () => {
+    const source = buildPiPermissionExtensionSourceForTest({
+      piMode: 'ask',
+      allowedDirectories: ['/tmp/workspace'],
+    })
+
+    expect(source).toContain('function getPermissionRiskHint(toolName, input)')
+    expect(source).toContain('const riskHint = getPermissionRiskHint(toolName, input)')
+    expect(source).toContain('mcpRiskHint: riskHint')
+  })
+
   test('Given permission extension source When MCP call_tool fallback has toolName Then risk hint can resolve the remote tool', () => {
     const source = buildPiPermissionExtensionSourceForTest({
       piMode: 'ask',

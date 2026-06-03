@@ -145,6 +145,20 @@ function formatPermissionDescription(toolName, input, decision) {
   return baseDescription
 }
 
+function getPermissionRiskHint(toolName, input) {
+  const rawTool = String(toolName || '').trim().toLowerCase()
+  const mcpRiskHint = getGlobalMcpToolRiskHint(rawTool, input)
+  if (mcpRiskHint?.risk === 'read' || mcpRiskHint?.risk === 'write' || mcpRiskHint?.risk === 'unknown') {
+    return {
+      risk: mcpRiskHint.risk,
+      ...(typeof mcpRiskHint.server === 'string' && mcpRiskHint.server.trim() ? { server: mcpRiskHint.server } : {}),
+      ...(typeof mcpRiskHint.toolName === 'string' && mcpRiskHint.toolName.trim() ? { toolName: mcpRiskHint.toolName } : {}),
+      ...(typeof mcpRiskHint.description === 'string' && mcpRiskHint.description.trim() ? { description: mcpRiskHint.description } : {}),
+    }
+  }
+  return undefined
+}
+
 export default function (pi) {
   pi.registerCommand('proma-permission-mode', {
     description: 'Internal Proma command: update Pi permission mode for this runtime.',
@@ -177,6 +191,7 @@ export default function (pi) {
       return { block: true, reason: 'Proma 权限确认不可用，已阻止 Pi 工具调用: ' + toolName }
     }
 
+    const riskHint = getPermissionRiskHint(toolName, input)
     const payload = JSON.stringify({
       promaPermissionRequest: true,
       toolName,
@@ -186,6 +201,7 @@ export default function (pi) {
       dangerLevel: decision.dangerLevel,
       piPermissionMode: currentPermissionMode,
       toolCallId: event.toolCallId,
+      mcpRiskHint: riskHint,
     })
     const confirmed = await ctx.ui.confirm('Proma Pi 权限确认', payload)
     if (!confirmed) {

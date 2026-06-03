@@ -1453,6 +1453,14 @@ export function migratePermissionMode(mode: string): PromaPermissionMode {
 /** 危险等级 */
 export type DangerLevel = 'safe' | 'normal' | 'dangerous'
 
+/** Pi MCP 工具风险提示 */
+export interface PiMcpPermissionRiskHint {
+  risk: 'read' | 'write' | 'unknown'
+  server?: string
+  toolName?: string
+  description?: string
+}
+
 /** 权限请求（主进程 → 渲染进程） */
 export interface PermissionRequest {
   /** 请求唯一 ID */
@@ -1481,6 +1489,8 @@ export interface PermissionRequest {
   sdkTitle?: string
   /** SDK 提供的详细描述，如 "Claude wants to write 200 lines to /path/to/file.ts" */
   sdkDescription?: string
+  /** Pi MCP bridge 传递的结构化风险提示 */
+  mcpRiskHint?: PiMcpPermissionRiskHint
 }
 
 /** 权限响应（渲染进程 → 主进程） */

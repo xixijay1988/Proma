@@ -3013,6 +3013,11 @@ describe('AgentOrchestrator pi routing', () => {
         toolName: 'mcp__docs__inspect_result',
         toolInput: { topic: 'alpha' },
         description: '调用 MCP 工具: docs / inspect_result',
+        mcpRiskHint: {
+          risk: 'write',
+          server: 'docs',
+          toolName: 'inspect_result',
+        },
         dangerLevel: 'normal',
         toolCallId: 'tool-mcp-1',
       }
@@ -3068,6 +3073,7 @@ describe('AgentOrchestrator pi routing', () => {
         sdkDisplayName: permissionRequest?.sdkDisplayName ?? null,
         sdkTitle: permissionRequest?.sdkTitle ?? null,
         sdkDescription: permissionRequest?.sdkDescription ?? null,
+        mcpRiskHint: permissionRequest?.mcpRiskHint ?? null,
       }))
     `)
 
@@ -3077,12 +3083,22 @@ describe('AgentOrchestrator pi routing', () => {
       sdkDisplayName?: string | null
       sdkTitle?: string | null
       sdkDescription?: string | null
+      mcpRiskHint?: {
+        risk?: string
+        server?: string
+        toolName?: string
+      } | null
     }
 
     expect(result.toolName).toBe('mcp__docs__inspect_result')
     expect(result.sdkDisplayName).toBe('Pi MCP docs / inspect_result')
     expect(result.sdkTitle).toBe('Pi 请求使用 MCP docs / inspect_result')
     expect(result.sdkDescription).toBe('调用 MCP 工具: docs / inspect_result')
+    expect(result.mcpRiskHint).toEqual({
+      risk: 'write',
+      server: 'docs',
+      toolName: 'inspect_result',
+    })
   })
 
   test('Given active session When stopping background task Then delegates to adapter stopTask', () => {

@@ -52,7 +52,7 @@ import {
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
 } from '@proma/shared'
-import type { PermissionRequest, PromaPermissionMode, AskUserRequest, ExitPlanModeRequest } from '@proma/shared'
+import type { PermissionRequest, PromaPermissionMode, AskUserRequest, ExitPlanModeRequest, PiMcpPermissionRiskHint } from '@proma/shared'
 import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
 import { isPromptTooLongError, isThinkingSignatureError, friendlyErrorMessage, mapSDKErrorToTypedError, extractErrorDetails, shouldKeepChannelOpen } from './adapters/claude-agent-adapter'
 import { isTransientNetworkError } from './error-patterns'
@@ -160,6 +160,20 @@ interface PiStructuredPermissionRequest {
   command?: string
   dangerLevel?: DangerLevel
   toolCallId?: string
+  mcpRiskHint?: PiMcpPermissionRiskHint
+}
+
+function parsePiMcpPermissionRiskHint(value: unknown): PiMcpPermissionRiskHint | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  if (record.risk !== 'read' && record.risk !== 'write' && record.risk !== 'unknown') return undefined
+
+  return {
+    risk: record.risk,
+    ...(typeof record.server === 'string' && record.server.trim() ? { server: record.server } : {}),
+    ...(typeof record.toolName === 'string' && record.toolName.trim() ? { toolName: record.toolName } : {}),
+    ...(typeof record.description === 'string' && record.description.trim() ? { description: record.description } : {}),
+  }
 }
 
 function parsePiStructuredPermissionRequest(request: AgentRuntimeExtensionUiRequest): PiStructuredPermissionRequest | null {
@@ -185,6 +199,7 @@ function parsePiStructuredPermissionRequest(request: AgentRuntimeExtensionUiRequ
       ? record.dangerLevel
       : undefined
     const toolCallId = typeof record.toolCallId === 'string' ? record.toolCallId : undefined
+    const mcpRiskHint = parsePiMcpPermissionRiskHint(record.mcpRiskHint)
 
     return {
       toolName: record.toolName,
@@ -193,6 +208,7 @@ function parsePiStructuredPermissionRequest(request: AgentRuntimeExtensionUiRequ
       ...(command && { command }),
       ...(dangerLevel && { dangerLevel }),
       ...(toolCallId && { toolCallId }),
+      ...(mcpRiskHint && { mcpRiskHint }),
     }
   } catch {
     return null
@@ -870,6 +886,7 @@ export class AgentOrchestrator {
               sdkDisplayName: `Pi ${displayToolName}`,
               sdkTitle: `Pi 请求使用 ${displayToolName}`,
               sdkDescription: structuredRequest.description,
+              ...(structuredRequest.mcpRiskHint && { mcpRiskHint: structuredRequest.mcpRiskHint }),
             }
 
             return new Promise<Omit<AgentRuntimeExtensionUiResponse, 'type' | 'id'>>((resolve) => {

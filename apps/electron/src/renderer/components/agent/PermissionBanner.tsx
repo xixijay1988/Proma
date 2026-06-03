@@ -14,6 +14,7 @@ import { Shield, ShieldAlert, Check, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { allPendingPermissionRequestsAtom, agentStreamingStatesAtom, finalizeStreamingActivities } from '@/atoms/agent-atoms'
 import type { DangerLevel } from '@proma/shared'
+import { getPermissionRiskBadge } from './permission-risk-ui'
 
 /** 危险等级对应的图标颜色 */
 const DANGER_ICON_STYLES: Record<DangerLevel, string> = {
@@ -89,6 +90,7 @@ export function PermissionBanner({ sessionId }: PermissionBannerProps): React.Re
   const iconColor = DANGER_ICON_STYLES[request.dangerLevel]
   const isDangerous = request.dangerLevel === 'dangerous'
   const IconComponent = isDangerous ? ShieldAlert : Shield
+  const riskBadge = getPermissionRiskBadge(request.mcpRiskHint)
 
   /** 响应权限请求 */
   const respond = async (behavior: 'allow' | 'deny', alwaysAllow = false): Promise<void> => {
@@ -137,6 +139,14 @@ export function PermissionBanner({ sessionId }: PermissionBannerProps): React.Re
           )}
         </div>
         <div className="flex items-center gap-1.5">
+          {riskBadge && (
+            <span
+              className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${riskBadge.className}`}
+              title={riskBadge.description}
+            >
+              {riskBadge.label}
+            </span>
+          )}
           <span className="text-xs text-muted-foreground font-mono">
             {request.sdkDisplayName ?? formatToolName(request.toolName)}
           </span>
