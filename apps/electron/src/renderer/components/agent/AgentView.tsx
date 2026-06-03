@@ -109,6 +109,7 @@ import {
   hasAgentRuntimeAvailableModel,
   isAgentRuntimeSelectedModelAvailable,
 } from '@/lib/agent-runtime-channel-options'
+import { buildAgentRuntimeImages } from './agent-runtime-images.ts'
 
 /** 稳定的空 SDKMessage 数组引用，避免 ?? [] 每次创建新引用 */
 const EMPTY_SDK_MESSAGES: SDKMessage[] = []
@@ -1487,6 +1488,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
     // 1. 如果有 pending 文件，先保存到 session 目录
     let fileReferences = ''
+    let runtimeImages: NonNullable<AgentSendInput['images']> = []
     if (pendingFiles.length > 0) {
       const workspace = workspaces.find((w) => w.id === currentWorkspaceId)
       if (!workspace) {
@@ -1546,6 +1548,11 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         })
         return
       }
+
+      runtimeImages = buildAgentRuntimeImages({
+        pendingFiles,
+        readFileData: (fileId) => window.__pendingAgentFileData?.get(fileId),
+      })
 
       const refs = allRefs.map((f) => `- ${f.filename}: ${f.targetPath}`).join('\n')
       fileReferences += `<attached_files>\n${refs}\n</attached_files>\n\n`
@@ -1636,6 +1643,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       startedAt: streamStartedAt,
       permissionModeOverride: permissionMode,
       ...(additionalDirectoriesForRun.size > 0 && { additionalDirectories: Array.from(additionalDirectoriesForRun) }),
+      ...(runtimeImages.length > 0 && { images: runtimeImages }),
       // 解析用户消息中的 Skill/MCP/会话引用，传递结构化元数据给后端
       ...(() => {
         const skills = [...effectiveText.matchAll(/\/skill:(\S+)/g)].map(m => m[1]).filter(Boolean) as string[]

@@ -809,6 +809,14 @@ export interface WorkspaceCapabilities {
 
 // ===== Agent 发送输入 =====
 
+/** Runtime 图片输入（当前由 Pi RPC prompt.images 使用） */
+export interface AgentRuntimeImageInput {
+  type: 'image'
+  data: string
+  mimeType: string
+  filename?: string
+}
+
 /**
  * Agent 发送消息的输入参数
  */
@@ -817,6 +825,8 @@ export interface AgentSendInput {
   sessionId: string
   /** 用户消息内容 */
   userMessage: string
+  /** 用户本轮附带的图片输入（base64，不包含 data URL 前缀） */
+  images?: AgentRuntimeImageInput[]
   /** 渠道 ID（用于获取 API Key） */
   channelId: string
   /** 模型 ID */

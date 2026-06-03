@@ -1157,6 +1157,7 @@ export class AgentOrchestrator {
           modelId,
           provider: piRuntimeConfig.provider,
         }),
+        ...(input.images && input.images.length > 0 ? { images: input.images } : {}),
         model: modelId || DEFAULT_MODEL_ID,
         cwd: agentCwd,
         provider: piRuntimeConfig.provider,

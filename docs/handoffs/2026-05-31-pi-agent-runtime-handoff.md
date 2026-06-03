@@ -2460,6 +2460,34 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
 - 已运行：
   - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "queued message" --timeout 30000`：红灯确认旧实现发送 `steer`，实现后 2 pass / 0 fail。
 
+## 2026-06-03 Phase J71 Pi image input bridge
+
+- 背景：
+  - Claude SDK 路径具备多模态输入能力；Pi RPC `prompt` 命令同样支持 `images: [{ type, data, mimeType }]`。
+  - Proma Agent UI 已能接收图片附件，但此前只把图片作为 `<attached_files>` 文件引用交给 Agent，不会给 Pi runtime 发送原生 image payload。
+  - J71 补齐 Pi 初始 prompt 的图片输入桥接，让 Pi 模型在支持视觉输入时可以直接接收用户上传图片。
+- 实现：
+  - `@proma/shared`：
+    - 新增 `AgentRuntimeImageInput`。
+    - `AgentSendInput` / `AgentQueryInput` 新增 `images?: AgentRuntimeImageInput[]`。
+  - Renderer：
+    - 新增 `agent-runtime-images.ts`，从 pending files 中提取非 path-backed、base64 可用的 `image/*` 附件。
+    - `AgentView.handleSend()` 在清理 pending file data 之前构造 runtime images，并随 `sendAgentMessage` 传给主进程。
+  - Main / Pi adapter：
+    - `AgentOrchestrator.runPiSession()` 将 `input.images` 透传给 Pi adapter。
+    - `PiAgentAdapter.query()` 在初始 `prompt` RPC command 中带上 `images`。
+- 版本：
+  - `@proma/shared` patch bump 到 `0.1.58`。
+  - `@proma/electron` patch bump 到 `0.10.107`。
+- 当前边界：
+  - J71 只桥接初始发送图片；运行中追加消息仍只支持文本，因为 `AgentQueueMessageInput` / `SDKUserMessageInput` 还没有图片字段。
+  - path-backed 图片或大文件图片不会被内联读取；仍通过 `<attached_files>` 引用路径，避免隐式读取大文件。
+  - Claude SDK 路径目前不消费 `AgentSendInput.images`，仍保持既有文件引用行为；后续若要完全统一多模态，需要单独补 Claude adapter/orchestrator 的 provider-neutral image path。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "image inputs" --timeout 30000`：红灯确认 prompt command 缺少 images，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "image input" --timeout 30000`：红灯确认 orchestrator 未透传 images，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/renderer/components/agent/agent-runtime-images.test.ts`：红灯确认 helper 缺失，实现后 2 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

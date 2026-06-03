@@ -2298,6 +2298,97 @@ describe('AgentOrchestrator pi routing', () => {
     expect(result.prompt).not.toContain('sk-memory-secret')
   })
 
+  test('Given pi engine and image input When sending message Then passes images to Pi adapter', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      mock.module('./agent-workspace-manager.ts', () => ({
+        getAgentWorkspace: (id) => id === 'workspace-pi'
+          ? { id, name: 'Pi Workspace', slug: 'pi-workspace', agentEngine: 'pi', createdAt: 0, updatedAt: 0 }
+          : undefined,
+        getWorkspaceMcpConfig: () => ({ servers: {} }),
+        getWorkspaceSkills: () => [],
+        getWorkspaceAttachedDirectories: () => [],
+        getWorkspaceAttachedFiles: () => [],
+        ensurePluginManifest: () => {},
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+
+      class FakePiAdapter {
+        lastInput = null
+
+        async *query(input) {
+          this.lastInput = input
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const adapter = new FakePiAdapter()
+      const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
+
+      await orchestrator.sendMessage({
+        sessionId: 'session-pi-image-input',
+        userMessage: '请看这张图',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        workspaceId: 'workspace-pi',
+        images: [
+          {
+            type: 'image',
+            data: 'iVBORw0KGgo=',
+            mimeType: 'image/png',
+            filename: 'diagram.png',
+          },
+        ],
+        startedAt: 890,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      console.log(JSON.stringify({
+        images: adapter.lastInput?.images ?? [],
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('images'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      images?: Array<{ type?: string; data?: string; mimeType?: string; filename?: string }>
+    }
+
+    expect(result.images).toEqual([
+      {
+        type: 'image',
+        data: 'iVBORw0KGgo=',
+        mimeType: 'image/png',
+        filename: 'diagram.png',
+      },
+    ])
+  })
+
   test('Given pi workspace and enabled nano banana When sending message Then loads Pi image extension and advertises image tool', () => {
     const output = runOrchestratorScript(`
       import { mock } from 'bun:test'

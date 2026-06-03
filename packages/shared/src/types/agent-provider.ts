@@ -6,7 +6,7 @@
  * 未来可扩展：PiAgentAdapter 等。
  */
 
-import type { SDKMessage } from './agent'
+import type { AgentRuntimeImageInput, SDKMessage } from './agent'
 
 /** SDK 用户消息（队列消息注入用，匹配 SDK SDKUserMessage 结构） */
 export interface SDKUserMessageInput {
@@ -141,6 +141,8 @@ export interface AgentQueryInput {
   sessionId: string
   /** 用户 prompt（已包含上下文注入） */
   prompt: string
+  /** 用户本轮附带的图片输入（base64，不包含 data URL 前缀） */
+  images?: AgentRuntimeImageInput[]
   /** 模型 ID */
   model?: string
   /** Agent 工作目录 */

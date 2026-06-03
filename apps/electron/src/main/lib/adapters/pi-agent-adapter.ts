@@ -1055,6 +1055,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         id: `proma-prompt-${input.sessionId}-${Date.now()}`,
         type: 'prompt',
         message: input.prompt,
+        ...(input.images && input.images.length > 0 ? { images: input.images } : {}),
       })
 
       for await (const event of piProcess.events) {

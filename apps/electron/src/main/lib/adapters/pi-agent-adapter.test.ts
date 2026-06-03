@@ -181,6 +181,81 @@ describe('PiAgentAdapter', () => {
     expect(result.resultSubtype).toBe('success')
   })
 
+  test('Given Pi query with image inputs When prompt is sent Then passes images to RPC prompt command', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => { sentCommands.push(command) },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const messages = []
+
+      for await (const message of adapter.query({
+        sessionId: 'session-pi-image-input',
+        prompt: 'describe image',
+        model: 'pi-model',
+        images: [
+          {
+            type: 'image',
+            data: 'iVBORw0KGgo=',
+            mimeType: 'image/png',
+            filename: 'diagram.png',
+          },
+        ],
+      })) {
+        messages.push(message)
+      }
+
+      console.log(JSON.stringify({
+        sentCommands,
+        resultSubtype: messages.at(-1)?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('sentCommands'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{
+        type?: string
+        message?: string
+        images?: Array<{ type?: string; data?: string; mimeType?: string; filename?: string }>
+      }>
+      resultSubtype?: string
+    }
+
+    expect(result.sentCommands?.[0]).toMatchObject({
+      type: 'prompt',
+      message: 'describe image',
+      images: [
+        {
+          type: 'image',
+          data: 'iVBORw0KGgo=',
+          mimeType: 'image/png',
+          filename: 'diagram.png',
+        },
+      ],
+    })
+    expect(result.resultSubtype).toBe('success')
+  })
+
   test('Given active Pi query When queued message is sent Then steers current RPC session', () => {
     const output = runPiAdapterScript(`
       import { mock } from 'bun:test'
