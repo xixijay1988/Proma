@@ -318,7 +318,9 @@ function createListToolsTool(server) {
         return {
           content: text,
           details: {
+            bridgeType: 'proma-pi-mcp-list-tools',
             server: server.name,
+            nativeToolName: server.listToolsToolName,
             toolCount: tools.length,
           },
         }
@@ -326,8 +328,10 @@ function createListToolsTool(server) {
         return {
           content: [{ type: 'text', text: formatMcpBridgeError(server, 'list_tools', error) }],
           details: {
+            bridgeType: 'proma-pi-mcp-list-tools',
             server: server.name,
             operation: 'list_tools',
+            nativeToolName: server.listToolsToolName,
             error: getErrorMessage(error),
           },
           isError: true,

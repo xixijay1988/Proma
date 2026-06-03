@@ -18,6 +18,7 @@ interface PiToolExecutionResult {
     toolName?: string
     nativeToolName?: string
     bridgeType?: string
+    toolCount?: number
     structuredContent?: unknown
     isError?: boolean
   }
@@ -642,6 +643,44 @@ describe('pi mcp extension', () => {
       expect(source).toContain("text: '[MCP resource result]\\n' + JSON.stringify(item.resource ?? item, null, 2)")
       expect(source).toContain('content: normalizeMcpContentBlocks(result.content)')
       expect(source).not.toContain('content: formatMcpContent(result.content)')
+    } finally {
+      rmSync(configDir, { recursive: true, force: true })
+    }
+  })
+
+  test('Given real stdio MCP server When list_tools runs Then bridge result keeps provenance metadata', async () => {
+    const configDir = mkdtempSync(join(tmpdir(), 'proma-pi-mcp-extension-'))
+    try {
+      const serverPath = join(configDir, 'fixture-mcp-server.mjs')
+      writeMcpFixtureServer(serverPath)
+
+      const extensionPath = ensurePiMcpExtension({
+        configDir,
+        servers: {
+          docs: {
+            type: 'stdio',
+            command: process.execPath,
+            args: [serverPath],
+            enabled: true,
+          },
+        },
+      })
+      expect(extensionPath).not.toBeNull()
+      if (!extensionPath) throw new Error('Expected Pi MCP extension path')
+
+      const result = await runGeneratedBridgeTool({
+        extensionPath,
+        toolName: 'mcp__docs__list_tools',
+        params: {},
+      })
+
+      expect(result.content).toContain('inspect-result')
+      expect(result.details).toMatchObject({
+        bridgeType: 'proma-pi-mcp-list-tools',
+        server: 'docs',
+        nativeToolName: 'mcp__docs__list_tools',
+        toolCount: 1,
+      })
     } finally {
       rmSync(configDir, { recursive: true, force: true })
     }
