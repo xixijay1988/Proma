@@ -427,6 +427,156 @@ describe('PiAgentAdapter', () => {
     expect(result.resultSubtype).toBe('success')
   })
 
+  test('Given active Pi query When steering mode is changed Then sends set_steering_mode command', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+      let releaseAgentEnd
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'set_steering_mode') {
+              queueMicrotask(() => releaseAgentEnd({
+                type: 'response',
+                id: command.id,
+                command: 'set_steering_mode',
+                success: true,
+              }))
+            }
+          },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield await waitForRelease
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const iterator = adapter.query({
+        sessionId: 'session-pi-steering-mode',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })[Symbol.asyncIterator]()
+
+      const firstYield = iterator.next()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      await adapter.setSteeringMode('session-pi-steering-mode', 'all')
+      const resultMessage = await firstYield
+
+      console.log(JSON.stringify({
+        sentCommands,
+        resultType: resultMessage.value?.type,
+        resultSubtype: resultMessage.value?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('sentCommands'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{ type?: string; mode?: string; id?: string }>
+      resultType?: string
+      resultSubtype?: string
+    }
+
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'set_steering_mode'])
+    expect(result.sentCommands?.[1]).toMatchObject({
+      type: 'set_steering_mode',
+      mode: 'all',
+    })
+    expect(result.sentCommands?.[1]?.id).toStartWith('proma-set-steering-mode-session-pi-steering-mode-')
+    expect(result.resultType).toBe('result')
+    expect(result.resultSubtype).toBe('success')
+  })
+
+  test('Given active Pi query When follow-up mode is changed Then sends set_follow_up_mode command', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+      let releaseAgentEnd
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'set_follow_up_mode') {
+              queueMicrotask(() => releaseAgentEnd({
+                type: 'response',
+                id: command.id,
+                command: 'set_follow_up_mode',
+                success: true,
+              }))
+            }
+          },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield await waitForRelease
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const iterator = adapter.query({
+        sessionId: 'session-pi-follow-up-mode',
+        prompt: 'initial prompt',
+        model: 'pi-model',
+      })[Symbol.asyncIterator]()
+
+      const firstYield = iterator.next()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      await adapter.setFollowUpMode('session-pi-follow-up-mode', 'one-at-a-time')
+      const resultMessage = await firstYield
+
+      console.log(JSON.stringify({
+        sentCommands,
+        resultType: resultMessage.value?.type,
+        resultSubtype: resultMessage.value?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('sentCommands'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{ type?: string; mode?: string; id?: string }>
+      resultType?: string
+      resultSubtype?: string
+    }
+
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'set_follow_up_mode'])
+    expect(result.sentCommands?.[1]).toMatchObject({
+      type: 'set_follow_up_mode',
+      mode: 'one-at-a-time',
+    })
+    expect(result.sentCommands?.[1]?.id).toStartWith('proma-set-follow-up-mode-session-pi-follow-up-mode-')
+    expect(result.resultType).toBe('result')
+    expect(result.resultSubtype).toBe('success')
+  })
+
   test('Given active Pi query with queued image inputs When queued message is sent Then passes images to RPC prompt command', () => {
     const output = runPiAdapterScript(`
       import { mock } from 'bun:test'

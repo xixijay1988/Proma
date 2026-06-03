@@ -53,6 +53,7 @@ import type {
   GetTaskOutputResult,
   StopTaskInput,
   AbortRuntimeRetryInput,
+  UpdateRuntimeQueueModesInput,
   GetRuntimeStateInput,
   AgentRuntimeStateResult,
   WorkspaceMcpConfig,
@@ -503,6 +504,9 @@ export interface ElectronAPI {
 
   /** 中止 runtime 自动重试 */
   abortRuntimeRetry: (input: AbortRuntimeRetryInput) => Promise<void>
+
+  /** 更新 runtime 队列投递模式 */
+  updateRuntimeQueueModes: (input: UpdateRuntimeQueueModesInput) => Promise<void>
 
   /** 获取活跃 runtime 状态 */
   getRuntimeState: (input: GetRuntimeStateInput) => Promise<AgentRuntimeStateResult>
@@ -1511,6 +1515,10 @@ const electronAPI: ElectronAPI = {
 
   abortRuntimeRetry: (input: AbortRuntimeRetryInput) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.ABORT_RUNTIME_RETRY, input)
+  },
+
+  updateRuntimeQueueModes: (input: UpdateRuntimeQueueModesInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_RUNTIME_QUEUE_MODES, input)
   },
 
   getRuntimeState: (input: GetRuntimeStateInput) => {

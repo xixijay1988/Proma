@@ -1,5 +1,5 @@
 import * as React from 'react'
-import type { AgentRuntimeStateResult } from '@proma/shared'
+import type { AgentRuntimeStateResult, PiRuntimeQueueMode } from '@proma/shared'
 import { Activity, AlertCircle, Loader2, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -15,6 +15,11 @@ interface PiRuntimeStatusPopoverProps {
   sessionId: string
   streaming: boolean
 }
+
+const QUEUE_MODE_OPTIONS: Array<{ value: PiRuntimeQueueMode; label: string }> = [
+  { value: 'one-at-a-time', label: '逐条' },
+  { value: 'all', label: '全部' },
+]
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -45,9 +50,52 @@ function CommandSourceBadge({ source }: { source: string }): React.ReactElement 
   )
 }
 
+function isPiRuntimeQueueMode(value: string | undefined): value is PiRuntimeQueueMode {
+  return value === 'all' || value === 'one-at-a-time'
+}
+
+function QueueModeControl({
+  label,
+  value,
+  disabled,
+  onChange,
+}: {
+  label: string
+  value: string | undefined
+  disabled: boolean
+  onChange: (mode: PiRuntimeQueueMode) => void
+}): React.ReactElement {
+  const selected = isPiRuntimeQueueMode(value) ? value : undefined
+
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-[11px] text-muted-foreground">{label}</span>
+      <div className="grid h-7 grid-cols-2 rounded-md bg-muted p-0.5">
+        {QUEUE_MODE_OPTIONS.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className={cn(
+              'min-w-[48px] rounded px-2 text-[11px] font-medium transition-colors',
+              selected === option.value
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+            disabled={disabled || selected === option.value}
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function PiRuntimeStatusPopover({ sessionId, streaming }: PiRuntimeStatusPopoverProps): React.ReactElement {
   const [open, setOpen] = React.useState(false)
   const [loading, setLoading] = React.useState(false)
+  const [updatingQueueMode, setUpdatingQueueMode] = React.useState(false)
   const [state, setState] = React.useState<AgentRuntimeStateResult | null>(null)
   const [error, setError] = React.useState<string | null>(null)
 
@@ -77,6 +125,26 @@ export function PiRuntimeStatusPopover({ sessionId, streaming }: PiRuntimeStatus
       void loadRuntimeState()
     }
   }, [loadRuntimeState])
+
+  const updateQueueMode = React.useCallback(async (
+    key: 'steeringMode' | 'followUpMode',
+    mode: PiRuntimeQueueMode,
+  ): Promise<void> => {
+    setUpdatingQueueMode(true)
+    setError(null)
+    try {
+      await window.electronAPI.updateRuntimeQueueModes({
+        sessionId,
+        [key]: mode,
+      })
+      await loadRuntimeState()
+    } catch (updateError) {
+      console.error('[PiRuntimeStatusPopover] 更新 Pi runtime 队列模式失败:', updateError)
+      setError(getErrorMessage(updateError))
+    } finally {
+      setUpdatingQueueMode(false)
+    }
+  }, [loadRuntimeState, sessionId])
 
   const rows = React.useMemo(() => state ? getPiRuntimeStatusRows(state) : [], [state])
   const commandGroups = React.useMemo(() => getPiRuntimeCommandGroups(state?.commands), [state?.commands])
@@ -144,6 +212,29 @@ export function PiRuntimeStatusPopover({ sessionId, streaming }: PiRuntimeStatus
                 {rows.map((row) => (
                   <StatusRow key={row.label} label={row.label} value={row.value} />
                 ))}
+              </div>
+
+              <div className="h-px bg-border" />
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-foreground">队列投递模式</span>
+                  {updatingQueueMode && (
+                    <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
+                  )}
+                </div>
+                <QueueModeControl
+                  label="Steering"
+                  value={state.steeringMode}
+                  disabled={loading || updatingQueueMode}
+                  onChange={(mode) => void updateQueueMode('steeringMode', mode)}
+                />
+                <QueueModeControl
+                  label="Follow-up"
+                  value={state.followUpMode}
+                  disabled={loading || updatingQueueMode}
+                  onChange={(mode) => void updateQueueMode('followUpMode', mode)}
+                />
               </div>
 
               <div className="h-px bg-border" />

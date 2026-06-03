@@ -64,6 +64,7 @@ import type {
   GetTaskOutputResult,
   StopTaskInput,
   AbortRuntimeRetryInput,
+  UpdateRuntimeQueueModesInput,
   GetRuntimeStateInput,
   AgentRuntimeStateResult,
   WorkspaceMcpConfig,
@@ -188,7 +189,7 @@ import {
   searchAgentSessionReferences,
   getAgentTaskOutput,
 } from './lib/agent-session-manager'
-import { runAgent, stopAgent, stopAgentTask, abortAgentRuntimeRetry, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, forkAgentSession, cloneActiveAgentSession, switchActiveAgentSession, setPiSessionFileForNextRun, syncPiNativeSessionMessages, applyPiGitCheckpointForSession, getAgentRuntimeState } from './lib/agent-service'
+import { runAgent, stopAgent, stopAgentTask, abortAgentRuntimeRetry, updateAgentRuntimeQueueModes, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, forkAgentSession, cloneActiveAgentSession, switchActiveAgentSession, setPiSessionFileForNextRun, syncPiNativeSessionMessages, applyPiGitCheckpointForSession, getAgentRuntimeState } from './lib/agent-service'
 import { assertAgentSessionForkSupported } from './lib/agent-session-capabilities'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
@@ -2130,6 +2131,19 @@ export function registerIpcHandlers(): void {
         await abortAgentRuntimeRetry(input)
       } catch (error) {
         console.error('[IPC] 中止自动重试失败:', error)
+        throw error
+      }
+    }
+  )
+
+  // 更新 runtime 队列投递模式
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.UPDATE_RUNTIME_QUEUE_MODES,
+    async (_, input: UpdateRuntimeQueueModesInput): Promise<void> => {
+      try {
+        await updateAgentRuntimeQueueModes(input)
+      } catch (error) {
+        console.error('[IPC] 更新 runtime 队列模式失败:', error)
         throw error
       }
     }

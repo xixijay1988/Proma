@@ -2589,6 +2589,39 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun run --filter='@proma/electron' typecheck`：通过。
   - `git diff --check`：通过。
 
+## 2026-06-03 Phase J76 Pi queue mode control parity
+
+- 背景：
+  - Pi RPC 支持官方队列投递模式命令：
+    - `set_steering_mode`：控制 `streamingBehavior: "steer"` 的 queued prompts 是全部投递还是逐条投递。
+    - `set_follow_up_mode`：控制 `streamingBehavior: "followUp"` 的 queued prompts 是全部投递还是逐条投递。
+  - Proma 之前只能展示 `get_state` 返回的 `steeringMode` / `followUpMode`，不能运行中切换。
+  - Pi RPC `queue_update` 只返回 pending 文本数组，没有稳定 item id，因此本阶段不实现伪取消/伪提升单条队列消息。
+- 实现：
+  - `@proma/shared`：
+    - `AgentProviderAdapter` 新增可选 `setSteeringMode()` / `setFollowUpMode()`。
+    - 新增 `PiRuntimeQueueMode` 与 `UpdateRuntimeQueueModesInput`。
+    - 新增 IPC 通道 `agent:update-runtime-queue-modes`。
+  - Main：
+    - `PiAgentAdapter` 将 `set_steering_mode` / `set_follow_up_mode` 加入 runtime command 白名单。
+    - 新增 `normalizePiQueueMode()`，只允许 `all` / `one-at-a-time`。
+    - `AgentOrchestrator.updateRuntimeQueueModes()` 将运行中设置转发到 adapter，并对不支持的 runtime 给出明确错误。
+    - `agent-service` / `ipc.ts` 接入 `updateAgentRuntimeQueueModes()`。
+  - Preload / Renderer：
+    - `window.electronAPI.updateRuntimeQueueModes()` 暴露给渲染进程。
+    - `PiRuntimeStatusPopover` 在 Pi runtime 状态弹窗里增加 steering / follow-up 两个紧凑二选一控制，设置成功后刷新状态。
+- 版本：
+  - `@proma/shared` patch bump 到 `0.1.60`。
+  - `@proma/electron` patch bump 到 `0.10.112`。
+- 当前边界：
+  - 这是 Pi 官方 queue mode parity，不是完整队列 item 管理。
+  - 由于 Pi RPC 没有暴露 queued item id 与单条 cancel/promote 命令，Proma 暂不把 `CANCEL_QUEUED_MESSAGE` / `PROMOTE_QUEUED_MESSAGE` 强行接到 Pi。
+  - Claude SDK 路径没有对应 queue mode 概念；该控制只在 Pi runtime 状态弹窗中出现。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts`：红灯确认 `setSteeringMode` / `setFollowUpMode` 缺失，实现后 44 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts`：红灯确认 `updateRuntimeQueueModes` 缺失，实现后 32 pass / 0 fail。
+  - `bun run typecheck`：4 个 workspace 全部通过。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

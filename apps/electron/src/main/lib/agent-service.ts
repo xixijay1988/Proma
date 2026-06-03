@@ -26,6 +26,7 @@ import type {
   AgentQueueMessageInput,
   StopTaskInput,
   AbortRuntimeRetryInput,
+  UpdateRuntimeQueueModesInput,
   PromaPermissionMode,
   AgentExternalRunSource,
   AgentEngine,
@@ -524,6 +525,16 @@ export async function stopAgentTask(input: StopTaskInput): Promise<void> {
  */
 export async function abortAgentRuntimeRetry(input: AbortRuntimeRetryInput): Promise<void> {
   await getSessionOperationOrchestrator(input.sessionId).abortRuntimeRetry(input.sessionId)
+}
+
+/**
+ * 更新活跃 runtime 的队列投递模式。
+ */
+export async function updateAgentRuntimeQueueModes(input: UpdateRuntimeQueueModesInput): Promise<void> {
+  await getSessionOperationOrchestrator(input.sessionId).updateRuntimeQueueModes(input.sessionId, {
+    steeringMode: input.steeringMode,
+    followUpMode: input.followUpMode,
+  })
 }
 
 /**

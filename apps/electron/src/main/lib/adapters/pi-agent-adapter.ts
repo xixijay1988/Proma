@@ -57,10 +57,13 @@ const PI_RUNTIME_COMMANDS = new Set([
   'abort_retry',
   'set_auto_compaction',
   'set_auto_retry',
+  'set_follow_up_mode',
+  'set_steering_mode',
   'set_thinking_level',
   'switch_session',
 ])
 const PI_THINKING_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh'])
+const PI_QUEUE_MODES = new Set(['all', 'one-at-a-time'])
 const KNOWN_PI_MESSAGE_UPDATE_EVENT_TYPES = new Set([
   'done',
   'error',
@@ -764,6 +767,14 @@ function normalizePiThinkingLevel(level: string): string {
   return normalized
 }
 
+function normalizePiQueueMode(mode: string): string {
+  const normalized = mode.trim()
+  if (!PI_QUEUE_MODES.has(normalized)) {
+    throw new Error(`[Pi Agent] 不支持的队列模式: ${mode}`)
+  }
+  return normalized
+}
+
 function isExtensionUiDialogMethod(method: string): boolean {
   return method === 'confirm' || method === 'select' || method === 'input' || method === 'editor'
 }
@@ -1329,6 +1340,22 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       'proma-set-permission-mode',
     )
     console.log(`[Pi Agent] 权限模式已切换: sessionId=${sessionId}, mode=${mode}, piMode=${piMode}`)
+  }
+
+  async setSteeringMode(sessionId: string, mode: string): Promise<void> {
+    await this.sendRuntimeCommand(
+      sessionId,
+      { type: 'set_steering_mode', mode: normalizePiQueueMode(mode) },
+      'proma-set-steering-mode',
+    )
+  }
+
+  async setFollowUpMode(sessionId: string, mode: string): Promise<void> {
+    await this.sendRuntimeCommand(
+      sessionId,
+      { type: 'set_follow_up_mode', mode: normalizePiQueueMode(mode) },
+      'proma-set-follow-up-mode',
+    )
   }
 
   dispose(): void {

@@ -1058,6 +1058,21 @@ export interface AbortRuntimeRetryInput {
   sessionId: string
 }
 
+/** Pi runtime 队列投递模式 */
+export type PiRuntimeQueueMode = 'all' | 'one-at-a-time'
+
+/**
+ * 更新 runtime 队列投递模式请求
+ */
+export interface UpdateRuntimeQueueModesInput {
+  /** 会话 ID */
+  sessionId: string
+  /** steering 队列投递模式 */
+  steeringMode?: PiRuntimeQueueMode
+  /** follow-up 队列投递模式 */
+  followUpMode?: PiRuntimeQueueMode
+}
+
 // ===== Agent Runtime 状态 =====
 
 /** 获取活跃 Agent runtime 状态请求 */
@@ -1516,6 +1531,8 @@ export const AGENT_IPC_CHANNELS = {
   STOP_TASK: 'agent:stop-task',
   /** 中止 runtime 自动重试 */
   ABORT_RUNTIME_RETRY: 'agent:abort-runtime-retry',
+  /** 更新 runtime 队列投递模式 */
+  UPDATE_RUNTIME_QUEUE_MODES: 'agent:update-runtime-queue-modes',
   /** 获取活跃 runtime 状态 */
   GET_RUNTIME_STATE: 'agent:get-runtime-state',
 

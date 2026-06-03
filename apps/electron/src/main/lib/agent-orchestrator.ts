@@ -3205,6 +3205,34 @@ export class AgentOrchestrator {
   }
 
   /**
+   * 更新活跃 runtime 的队列投递模式。
+   *
+   * Pi RPC 支持 steering / follow-up 队列模式；不支持该能力的 runtime 会明确报错。
+   */
+  async updateRuntimeQueueModes(
+    sessionId: string,
+    input: { steeringMode?: string; followUpMode?: string },
+  ): Promise<void> {
+    if (!this.activeSessions.has(sessionId)) {
+      throw new Error(`[Agent 编排] 会话未运行，无法更新队列模式: ${sessionId}`)
+    }
+
+    if (input.steeringMode) {
+      if (!this.adapter.setSteeringMode) {
+        throw new Error('[Agent 编排] 当前适配器不支持 steering 队列模式')
+      }
+      await this.adapter.setSteeringMode(sessionId, input.steeringMode)
+    }
+
+    if (input.followUpMode) {
+      if (!this.adapter.setFollowUpMode) {
+        throw new Error('[Agent 编排] 当前适配器不支持 follow-up 队列模式')
+      }
+      await this.adapter.setFollowUpMode(sessionId, input.followUpMode)
+    }
+  }
+
+  /**
    * 停止活跃 runtime 中的 Shell 任务。
    *
    * Pi RPC 支持 abort_bash；不支持该能力的 runtime 会在此处明确报错。

@@ -211,6 +211,10 @@ export interface AgentProviderAdapter {
   setThinkingLevel?(sessionId: string, level: string): Promise<void>
   /** 动态切换活跃查询的权限模式（可选，仅支持 SDK 原生 setPermissionMode 的 Provider） */
   setPermissionMode?(sessionId: string, mode: string): Promise<void>
+  /** 动态切换活跃 runtime 的 steering 队列投递模式（可选，仅支持具备 queue mode 的 Provider） */
+  setSteeringMode?(sessionId: string, mode: string): Promise<void>
+  /** 动态切换活跃 runtime 的 follow-up 队列投递模式（可选，仅支持具备 queue mode 的 Provider） */
+  setFollowUpMode?(sessionId: string, mode: string): Promise<void>
   /** 获取活跃 runtime 的原生 fork 候选消息（可选，仅支持具备 session tree 的 Provider） */
   getForkMessages?(sessionId: string): Promise<AgentRuntimeForkMessage[]>
   /** 在活跃 runtime 中执行原生 fork（可选，仅支持具备 session tree 的 Provider） */
