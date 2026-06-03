@@ -79,6 +79,11 @@ interface PiRuntimeCommandInput {
   [key: string]: unknown
 }
 
+interface PiDerivedRetryState {
+  autoRetryEnabled?: boolean
+  isRetrying?: boolean
+}
+
 function isPiAgentEnabled(): boolean {
   return process.env.PROMA_PI_AGENT_ENABLED !== '0'
 }
@@ -835,6 +840,7 @@ function convertPiRpcEvent(input: AgentQueryInput, event: PiRpcEvent): SDKMessag
 export class PiAgentAdapter implements AgentProviderAdapter {
   readonly name = 'pi' as const
   private readonly processes = new Map<string, StartedPiRpcSession>()
+  private readonly retryStates = new Map<string, PiDerivedRetryState>()
   private readonly pendingResponses = new Map<string, Map<string, {
     command: string
     resolve: (event: PiRpcEvent) => void
@@ -936,6 +942,26 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         reject(error instanceof Error ? error : new Error(String(error)))
       }
     })
+  }
+
+  private updateRetryState(sessionId: string, patch: PiDerivedRetryState): void {
+    const current = this.retryStates.get(sessionId) ?? {}
+    this.retryStates.set(sessionId, { ...current, ...patch })
+  }
+
+  private clearRetryState(sessionId: string): void {
+    this.retryStates.delete(sessionId)
+  }
+
+  private syncRetryStateFromEvent(sessionId: string, event: PiRpcEvent): void {
+    if (event.type === 'auto_retry_start') {
+      this.updateRetryState(sessionId, { isRetrying: true })
+      return
+    }
+
+    if (event.type === 'auto_retry_end') {
+      this.updateRetryState(sessionId, { isRetrying: false })
+    }
   }
 
   private recordUnknownChildEvent(event: PiRpcEvent): void {
@@ -1071,6 +1097,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           return
         }
 
+        this.syncRetryStateFromEvent(input.sessionId, event)
         this.recordMalformedEvent(event)
 
         for (const message of convertPiRpcEvent(input, event)) {
@@ -1107,6 +1134,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       yield createErrorResultMessage(input, diagnosticMessage)
     } finally {
       this.processes.delete(input.sessionId)
+      this.clearRetryState(input.sessionId)
       this.rejectPendingResponses(input.sessionId, '[Pi Agent] Pi RPC 会话已结束')
       piProcess.kill()
     }
@@ -1117,6 +1145,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     if (!piProcess) return
 
     this.processes.delete(sessionId)
+    this.clearRetryState(sessionId)
     piProcess.abort()
   }
 
@@ -1219,6 +1248,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     )
     return {
       ...parseRuntimeStateData(stateResponse.data),
+      ...this.retryStates.get(sessionId),
       stats: parseRuntimeSessionStatsData(statsResponse.data),
       commands: parseRuntimeCommandsData(commandsResponse.data),
     }
@@ -1264,6 +1294,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       { type: 'set_auto_retry', enabled },
       'proma-set-auto-retry',
     )
+    this.updateRetryState(sessionId, { autoRetryEnabled: enabled })
   }
 
   async abortRetry(sessionId: string): Promise<void> {
@@ -1272,6 +1303,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
       { type: 'abort_retry' },
       'proma-abort-retry',
     )
+    this.updateRetryState(sessionId, { isRetrying: false })
   }
 
   async setThinkingLevel(sessionId: string, level: string): Promise<void> {
@@ -1286,6 +1318,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     for (const piProcess of this.processes.values()) {
       piProcess.abort()
     }
+    this.retryStates.clear()
     for (const sessionId of this.pendingResponses.keys()) {
       this.rejectPendingResponses(sessionId, '[Pi Agent] Pi adapter 已释放')
     }

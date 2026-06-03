@@ -1080,6 +1080,10 @@ export interface AgentRuntimeStateResult {
   nativeSessionFile?: string
   /** Runtime 是否启用自动压缩 */
   autoCompactionEnabled?: boolean
+  /** Runtime 是否启用自动重试 */
+  autoRetryEnabled?: boolean
+  /** Runtime 是否正在自动重试 */
+  isRetrying?: boolean
   /** Runtime 原生消息数量 */
   messageCount?: number
   /** Runtime 待处理消息数量 */

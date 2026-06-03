@@ -88,6 +88,8 @@ export interface AgentRuntimeState {
   nativeSessionName?: string
   nativeSessionFile?: string
   autoCompactionEnabled?: boolean
+  autoRetryEnabled?: boolean
+  isRetrying?: boolean
   messageCount?: number
   pendingMessageCount?: number
   stats?: AgentRuntimeSessionStats

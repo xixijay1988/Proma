@@ -2357,6 +2357,33 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/renderer/hooks/useGlobalAgentListeners.test.ts`：1 pass / 0 fail。
   - `bun test apps/electron/src/main/lib/adapters/pi-process.test.ts apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts apps/electron/src/main/lib/adapters/pi-event-converter.test.ts apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts apps/electron/src/renderer/hooks/useGlobalAgentListeners.test.ts`：100 pass / 0 fail。
 
+## 2026-06-03 Phase J67 Pi retry runtime state diagnostics
+
+- 背景：
+  - Pi upstream `AgentSession` 有 `isRetrying` / `autoRetryEnabled` getter，但当前 `@earendil-works/pi-coding-agent@0.76.0` RPC `get_state` 尚未返回这两个字段。
+  - Proma 已能同步 Pi auto retry 并桥接 retry lifecycle；runtime diagnostics 仍缺少 retry 开关与进行中状态。
+  - J67 不修改 `node_modules`，而是在 Proma adapter 侧用已发送命令和 lifecycle event 派生诊断字段。
+- 实现：
+  - `@proma/shared`：
+    - `AgentRuntimeState` / `AgentRuntimeStateResult` 新增 `autoRetryEnabled?: boolean` 与 `isRetrying?: boolean`。
+  - `PiAgentAdapter`：
+    - 新增 session 级 derived retry state。
+    - `setAutoRetry()` 成功后记录 `autoRetryEnabled`。
+    - `auto_retry_start` 记录 `isRetrying: true`。
+    - `auto_retry_end` 与 `abortRetry()` 成功后记录 `isRetrying: false`。
+    - `getRuntimeState()` 合并 Pi RPC `get_state` 与 Proma-side derived retry diagnostics。
+    - query finally、abort、dispose 时清理 session retry state。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.103`。
+  - `@proma/shared` patch bump 到 `0.1.57`。
+- 当前边界：
+  - 该字段只对活跃 Pi runtime 可靠；会话结束后 adapter 会清理派生状态。
+  - 如果用户未通过 Proma 调用 `set_auto_retry`，`autoRetryEnabled` 可能保持 undefined，避免假装知道 Pi 内部默认值。
+  - 若未来 Pi RPC 原生返回 `isRetrying` / `autoRetryEnabled`，可改为优先使用 runtime 原生字段或与派生状态做一致性检查。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "Given Pi retry lifecycle is active"`：红灯确认 runtime state 缺少 retry 字段，实现后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "runtime state|auto retry|retry is aborted"`：6 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

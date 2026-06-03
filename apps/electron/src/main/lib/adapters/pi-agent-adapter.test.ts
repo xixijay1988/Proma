@@ -1736,6 +1736,161 @@ describe('PiAgentAdapter', () => {
     expect(result.resultSubtype).toBe('success')
   })
 
+  test('Given Pi retry lifecycle is active When runtime state is requested Then derives retry diagnostics', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+      let releaseAgentEnd
+      let notifyResponse
+      const responses = []
+      const waitForRelease = new Promise((resolve) => { releaseAgentEnd = resolve })
+      const waitForResponse = () => new Promise((resolve) => {
+        const existing = responses.shift()
+        if (existing) {
+          resolve(existing)
+          return
+        }
+        notifyResponse = resolve
+      })
+      const pushResponse = (response) => {
+        if (notifyResponse) {
+          const resolve = notifyResponse
+          notifyResponse = null
+          resolve(response)
+          return
+        }
+        responses.push(response)
+      }
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => {
+            sentCommands.push(command)
+            if (command.type === 'set_auto_retry') {
+              queueMicrotask(() => pushResponse({
+                type: 'response',
+                id: command.id,
+                command: 'set_auto_retry',
+                success: true,
+                data: {},
+              }))
+            }
+            if (command.type === 'get_state') {
+              queueMicrotask(() => pushResponse({
+                type: 'response',
+                id: command.id,
+                command: 'get_state',
+                success: true,
+                data: {
+                  isStreaming: true,
+                  isCompacting: false,
+                },
+              }))
+            }
+            if (command.type === 'get_session_stats') {
+              queueMicrotask(() => pushResponse({
+                type: 'response',
+                id: command.id,
+                command: 'get_session_stats',
+                success: true,
+                data: {},
+              }))
+            }
+            if (command.type === 'get_commands') {
+              queueMicrotask(() => pushResponse({
+                type: 'response',
+                id: command.id,
+                command: 'get_commands',
+                success: true,
+                data: { commands: [] },
+              }))
+            }
+          },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield await waitForResponse()
+            yield {
+              type: 'auto_retry_start',
+              attempt: 1,
+              maxAttempts: 3,
+              delayMs: 1000,
+              errorMessage: 'provider timeout',
+            }
+            yield await waitForResponse()
+            yield await waitForResponse()
+            yield await waitForResponse()
+            await waitForRelease
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const messages = []
+      let resolveRetryStarted
+      const waitForRetryStarted = new Promise((resolve) => { resolveRetryStarted = resolve })
+      const drainPromise = (async () => {
+        for await (const message of adapter.query({
+          sessionId: 'session-pi-runtime-retry-state',
+          prompt: 'initial prompt',
+          model: 'pi-model',
+          runtimeAutoRetryEnabled: true,
+        })) {
+          messages.push(message)
+          if (message?._promaEvent?.type === 'retry' && message._promaEvent.status === 'starting') {
+            resolveRetryStarted()
+          }
+        }
+      })()
+
+      await waitForRetryStarted
+      const runtimeState = await adapter.getRuntimeState('session-pi-runtime-retry-state')
+      releaseAgentEnd()
+      await drainPromise
+
+      console.log(JSON.stringify({
+        sentCommands,
+        runtimeState,
+        messageTypes: messages.map((message) => message?.type),
+        messageSubtypes: messages.map((message) => message?.subtype ?? null),
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('runtimeState'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{ type?: string; id?: string; enabled?: boolean }>
+      runtimeState?: {
+        isStreaming?: boolean
+        isCompacting?: boolean
+        autoRetryEnabled?: boolean
+        isRetrying?: boolean
+      }
+      messageTypes?: string[]
+      messageSubtypes?: Array<string | null>
+    }
+
+    expect(result.sentCommands?.map((command) => command.type)).toEqual(['set_auto_retry', 'prompt', 'get_state', 'get_session_stats', 'get_commands'])
+    expect(result.sentCommands?.[0]).toMatchObject({ type: 'set_auto_retry', enabled: true })
+    expect(result.runtimeState).toMatchObject({
+      isStreaming: true,
+      isCompacting: false,
+      autoRetryEnabled: true,
+      isRetrying: true,
+    })
+    expect(result.messageTypes).toEqual(['system', 'system', 'result'])
+    expect(result.messageSubtypes).toEqual(['pi_runtime_event', 'pi_runtime_event', 'success'])
+  })
+
   test('Given Pi native command failure When fork messages are requested Then rejects with response error', () => {
     const output = runPiAdapterScript(`
       import { mock } from 'bun:test'
