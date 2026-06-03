@@ -16,6 +16,8 @@ import type {
   PromaPermissionMode,
   SDKUserMessageInput,
 } from '@proma/shared'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { basename, join } from 'node:path'
 import { convertPiTextDelta, convertPiThinkingDelta, convertPiToolStart } from './pi-event-converter'
 import { mapPromaPermissionModeToPiMode } from './pi-permission-mapping'
 import { startPiRpcSession, type PiRpcCommand, type PiRpcEvent, type StartedPiRpcSession } from './pi-process'
@@ -439,6 +441,24 @@ function getRecord(record: Record<string, unknown>, key: string): Record<string,
   return asRecord(record[key])
 }
 
+function getPiSessionIdFromFileName(filePath: string): string | null {
+  const fileName = basename(filePath)
+  if (!fileName.endsWith('.jsonl')) return null
+
+  const withoutExt = fileName.slice(0, -'.jsonl'.length)
+  const marker = 'Z_'
+  const markerIndex = withoutExt.indexOf(marker)
+  if (markerIndex >= 0) {
+    const id = withoutExt.slice(markerIndex + marker.length)
+    return id || null
+  }
+
+  const underscoreIndex = withoutExt.indexOf('_')
+  if (underscoreIndex < 0) return withoutExt || null
+  const id = withoutExt.slice(underscoreIndex + 1)
+  return id || null
+}
+
 function getPromptFailureMessage(event: PiRpcEvent): string | null {
   if (event.type !== 'response') return null
   if (event.command !== 'prompt') return null
@@ -501,6 +521,29 @@ function extractAssistantContentFromPiMessage(message: Record<string, unknown>):
   return blocks
 }
 
+function extractPiTextContent(value: unknown): string {
+  if (typeof value === 'string') return value.replace(/\s+/g, ' ').trim()
+  if (!Array.isArray(value)) return ''
+
+  const parts: string[] = []
+  for (const item of value) {
+    const block = asRecord(item)
+    if (block?.type === 'text') {
+      const text = getString(block, 'text')
+      if (text) parts.push(text)
+    }
+  }
+
+  return parts.join(' ').replace(/\s+/g, ' ').trim()
+}
+
+function extractSdkAssistantText(message: SDKMessage): string {
+  if (message.type !== 'assistant') return ''
+
+  const messageRecord = asRecord((message as Record<string, unknown>).message)
+  return extractPiTextContent(messageRecord?.content)
+}
+
 function extractPiEntryId(event: PiRpcEvent, message: Record<string, unknown>): string | null {
   const directEntryId = getString(event, 'entryId') ?? getString(event, 'entry_id')
   if (directEntryId) return directEntryId
@@ -515,9 +558,10 @@ function extractPiEntryId(event: PiRpcEvent, message: Record<string, unknown>): 
   if (messageEntryId) return messageEntryId
 
   const messageEntry = getRecord(message, 'entry')
-  return messageEntry
+  const nestedMessageEntryId = messageEntry
     ? getString(messageEntry, 'id') ?? getString(messageEntry, 'entryId') ?? getString(messageEntry, 'entry_id')
     : null
+  return nestedMessageEntryId
 }
 
 function createFinalAssistantMessage(input: AgentQueryInput, event: PiRpcEvent): SDKMessage | null {
@@ -540,6 +584,86 @@ function createFinalAssistantMessage(input: AgentQueryInput, event: PiRpcEvent):
     session_id: input.sessionId,
     ...(piEntryId ? { _promaPiEntryId: piEntryId } : {}),
   }
+}
+
+interface PiAssistantSessionEntry {
+  id: string
+  text: string
+}
+
+function resolvePiSessionFile(input: AgentQueryInput): string | null {
+  const explicitSessionPath = input.runtimeSessionPath?.trim()
+  if (explicitSessionPath && existsSync(explicitSessionPath)) return explicitSessionPath
+
+  const sessionDir = input.runtimeSessionDir?.trim()
+  const sessionId = input.sessionId.trim()
+  if (!sessionDir || !sessionId || !existsSync(sessionDir)) return null
+
+  const candidates = readdirSync(sessionDir)
+    .filter((entry) => entry.endsWith('.jsonl') && getPiSessionIdFromFileName(entry) === sessionId)
+    .map((entry) => join(sessionDir, entry))
+
+  if (candidates.length === 0) return null
+  candidates.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)
+  return candidates[0] ?? null
+}
+
+function loadPiAssistantSessionEntries(input: AgentQueryInput): PiAssistantSessionEntry[] {
+  const sessionFile = resolvePiSessionFile(input)
+  if (!sessionFile) return []
+
+  try {
+    return readFileSync(sessionFile, 'utf-8')
+      .split(/\r?\n/)
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as unknown)
+      .map(asRecord)
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+      .filter((entry) => entry.type === 'message' && typeof entry.id === 'string')
+      .map((entry) => {
+        const message = asRecord(entry.message)
+        if (message?.role !== 'assistant') return null
+        return {
+          id: entry.id as string,
+          text: extractPiTextContent(message.content),
+        }
+      })
+      .filter((entry): entry is PiAssistantSessionEntry => entry !== null)
+  } catch (error) {
+    console.warn('[Pi Agent] 读取 Pi 原生 session entry 失败，分叉锚点将降级:', error)
+    return []
+  }
+}
+
+function attachPiEntryIdsFromSession(input: AgentQueryInput, messages: SDKMessage[]): SDKMessage[] {
+  if (messages.length === 0) return []
+
+  const entries = loadPiAssistantSessionEntries(input)
+  if (entries.length === 0) return messages
+
+  const pendingAssistantCount = messages.filter((message) => (
+    message.type === 'assistant'
+    && !((message as Record<string, unknown>)._promaPiEntryId)
+  )).length
+  const candidateEntries = pendingAssistantCount > 0
+    ? entries.slice(-pendingAssistantCount)
+    : []
+  const usedEntryIds = new Set<string>()
+  return messages.map((message) => {
+    if (message.type !== 'assistant') return message
+    if ((message as Record<string, unknown>)._promaPiEntryId) return message
+
+    const text = extractSdkAssistantText(message)
+    const matched = candidateEntries.find((entry) => !usedEntryIds.has(entry.id) && entry.text === text)
+      ?? candidateEntries.find((entry) => !usedEntryIds.has(entry.id))
+    if (!matched) return message
+
+    usedEntryIds.add(matched.id)
+    return {
+      ...message,
+      _promaPiEntryId: matched.id,
+    } as SDKMessage
+  })
 }
 
 function isPiResponseEvent(event: PiRpcEvent): boolean {
@@ -569,7 +693,7 @@ function parseForkMessagesData(data: unknown): AgentRuntimeForkMessage[] {
     const itemRecord = asRecord(item)
     if (!itemRecord) continue
 
-    const id = getString(itemRecord, 'id')
+    const id = getString(itemRecord, 'id') ?? getString(itemRecord, 'entryId')
     if (!id) continue
 
     const text = getString(itemRecord, 'text') ?? ''
@@ -640,6 +764,7 @@ function parseRuntimeStateData(data: unknown): AgentRuntimeState {
   const nativeSessionName = getString(dataRecord, 'sessionName')
   const nativeSessionFile = getString(dataRecord, 'sessionFile')
   const autoCompactionEnabled = getBoolean(dataRecord, 'autoCompactionEnabled')
+  const autoRetryEnabled = getBoolean(dataRecord, 'autoRetryEnabled')
   const messageCount = typeof dataRecord.messageCount === 'number' ? dataRecord.messageCount : undefined
   const pendingMessageCount = typeof dataRecord.pendingMessageCount === 'number' ? dataRecord.pendingMessageCount : undefined
 
@@ -656,6 +781,7 @@ function parseRuntimeStateData(data: unknown): AgentRuntimeState {
     ...(nativeSessionName ? { nativeSessionName } : {}),
     ...(nativeSessionFile ? { nativeSessionFile } : {}),
     ...(autoCompactionEnabled != null ? { autoCompactionEnabled } : {}),
+    ...(autoRetryEnabled != null ? { autoRetryEnabled } : {}),
     ...(messageCount != null ? { messageCount } : {}),
     ...(pendingMessageCount != null ? { pendingMessageCount } : {}),
   }
@@ -1074,6 +1200,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         ...(input.images && input.images.length > 0 ? { images: input.images } : {}),
       })
 
+      const finalAssistantMessages: SDKMessage[] = []
       for await (const event of piProcess.events) {
         if (this.consumePendingResponse(input.sessionId, event)) {
           continue
@@ -1123,7 +1250,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
 
         const finalAssistantMessage = createFinalAssistantMessage(input, event)
         if (finalAssistantMessage) {
-          yield finalAssistantMessage
+          finalAssistantMessages.push(finalAssistantMessage)
         }
 
         this.recordUnknownChildEvent(event)
@@ -1137,6 +1264,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
             return
           }
 
+          for (const message of attachPiEntryIdsFromSession(input, finalAssistantMessages)) {
+            yield message
+          }
           yield createSuccessResultMessage(input)
           return
         }

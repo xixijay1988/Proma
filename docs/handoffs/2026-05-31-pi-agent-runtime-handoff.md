@@ -2966,6 +2966,42 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts -t "MCP risk hint"`：红灯确认 mapping 未消费结构化 hint，实施后 3 pass / 0 fail。
   - `bun test apps/electron/src/main/lib/adapters/pi-permission-mapping.test.ts`：27 pass / 0 fail。
 
+## 2026-06-04 Phase J91 Pi native fork/rewind entry anchors
+
+- 背景：
+  - 新建 Pi Agent 会话在回复完成后只显示“复制”按钮，没有“分叉 / 回退”入口。
+  - Renderer 只有在 assistant 消息带 `uuid` 或 `_promaPiEntryId` 时才显示分叉/回退操作。
+  - Pi `message_end.message.id` 是 Pi 模型消息 id，不是 session tree entry id，不能作为 `fork` / `rewind` 的稳定锚点。
+- 实现：
+  - `pi-agent-adapter.ts`：
+    - `message_end` 先暂存最终 assistant 消息，等 `agent_end` 后读取 Pi 原生 session JSONL。
+    - 从 Pi JSONL 外层 `type: "message"` entry 读取真实 session tree entry id，并按 assistant 文本匹配回 Proma 最终消息，补 `_promaPiEntryId`。
+    - fallback 只在本轮最终 assistant 消息数量对应的最近 session entries 内选择，避免旧 assistant entry 被误用为新回复锚点。
+    - 移除 `message.id` 作为 entry id fallback，避免把错误 id 传给 Pi 原生命令。
+    - `get_fork_messages` 解析兼容 Pi documented `entryId` 字段。
+    - `get_state` 解析并透传 `autoRetryEnabled`。
+  - 测试：
+    - 覆盖 `message_end` 缺少 wrapper entry id 时从 Pi native session 反查 `_promaPiEntryId`。
+    - 覆盖 session 内存在旧 assistant 且最终文本轻微不一致时，fallback 使用最近的当前轮 entry。
+    - 覆盖 `get_fork_messages` 返回 `entryId` 时仍能映射为 Proma fork candidates。
+    - 覆盖 `get_state.autoRetryEnabled` 运行时诊断。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.127`。
+- 当前边界：
+  - 这次只修复 Pi 新会话最终 assistant 消息的分叉/回退锚点，不改变 Renderer 操作栏逻辑。
+  - 如果 Pi JSONL 还未落盘或 assistant 文本无法匹配，会保留原消息，分叉/回退入口可能仍降级隐藏。
+  - 后续可进一步接入 Pi RPC 直接返回 entry id，减少对 session 文件落盘时序的依赖。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "session tree entry id"`：红灯确认缺少 `_promaPiEntryId`，实施后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "fork messages are requested"`：1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "runtime state is requested"`：1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "fallback uses latest session tree entry"`：红灯确认 fallback 误选旧 entry，实施后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts`：49 pass / 0 fail。
+  - `bun run --filter='@proma/electron' typecheck`：通过。
+  - `bun test`：314 pass / 0 fail。
+  - `bun run electron:build`：通过。
+  - `git diff --check`：通过。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

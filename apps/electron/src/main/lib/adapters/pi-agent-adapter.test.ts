@@ -1086,7 +1086,7 @@ describe('PiAgentAdapter', () => {
                 success: true,
                 data: {
                   messages: [
-                    { id: 'entry-user-1', text: 'first user prompt' },
+                    { entryId: 'entry-user-1', text: 'first user prompt' },
                     { id: 'entry-user-2', text: 'second user prompt' },
                   ],
                 },
@@ -1147,7 +1147,10 @@ describe('PiAgentAdapter', () => {
 
     expect(result.sentCommands?.map((command) => command.type)).toEqual(['prompt', 'get_fork_messages'])
     expect(result.sentCommands?.[1]?.id).toStartWith('proma-get-fork-messages-session-pi-fork-messages-')
-    expect(result.forkMessages).toEqual([
+    expect(result.forkMessages?.map((message) => ({
+      id: message.id,
+      text: message.text,
+    }))).toEqual([
       { id: 'entry-user-1', text: 'first user prompt' },
       { id: 'entry-user-2', text: 'second user prompt' },
     ])
@@ -2317,6 +2320,7 @@ describe('PiAgentAdapter', () => {
                   sessionId: 'pi-native-session-1',
                   sessionName: 'Pi Native',
                   autoCompactionEnabled: true,
+                  autoRetryEnabled: true,
                   messageCount: 12,
                   pendingMessageCount: 2,
                 },
@@ -2454,6 +2458,7 @@ describe('PiAgentAdapter', () => {
         nativeSessionName?: string
         nativeSessionFile?: string
         autoCompactionEnabled?: boolean
+        autoRetryEnabled?: boolean
         messageCount?: number
         pendingMessageCount?: number
         stats?: {
@@ -2504,6 +2509,7 @@ describe('PiAgentAdapter', () => {
       nativeSessionName: 'Pi Native',
       nativeSessionFile: '/tmp/pi-session.jsonl',
       autoCompactionEnabled: true,
+      autoRetryEnabled: true,
       messageCount: 12,
       pendingMessageCount: 2,
       stats: {
@@ -3225,6 +3231,157 @@ describe('PiAgentAdapter', () => {
     expect(result.text).toBe('final answer')
     expect(result.uuid).toBeNull()
     expect(result.piEntryId).toBe('pi-entry-assistant-1')
+    expect(result.resultSubtype).toBe('success')
+  })
+
+  test('Given Pi message end without wrapper entry id When query completes Then attaches Pi session tree entry id', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+      import { mkdtempSync, writeFileSync } from 'node:fs'
+      import { join } from 'node:path'
+      import { tmpdir } from 'node:os'
+
+      const sessionId = 'session-pi-message-id-fallback'
+      const sessionDir = mkdtempSync(join(tmpdir(), 'proma-pi-entry-fallback-'))
+      const sessionFile = join(sessionDir, '2026-06-04T00-00-00-000Z_session-pi-message-id-fallback.jsonl')
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: () => {},
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield {
+              type: 'message_end',
+              message: {
+                role: 'assistant',
+                id: 'pi-message-assistant-fallback',
+                content: [{ type: 'text', text: 'fallback answer' }],
+                stopReason: 'stop',
+              },
+            }
+            writeFileSync(sessionFile, [
+              JSON.stringify({ type: 'session', version: 3, id: sessionId, timestamp: '2026-06-04T00:00:00.000Z', cwd: '/tmp' }),
+              JSON.stringify({ type: 'message', id: 'entry-user-1', parentId: null, timestamp: '2026-06-04T00:00:01.000Z', message: { role: 'user', content: 'hello', timestamp: 1 } }),
+              JSON.stringify({ type: 'message', id: 'entry-assistant-final', parentId: 'entry-user-1', timestamp: '2026-06-04T00:00:02.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'fallback answer' }], timestamp: 2 } }),
+            ].join('\\n') + '\\n')
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const messages = []
+
+      for await (const message of adapter.query({
+        sessionId,
+        prompt: 'hello',
+        model: 'deepseek-v4-flash',
+        runtimeSessionDir: sessionDir,
+      })) {
+        messages.push(message)
+      }
+
+      const assistant = messages.find((message) => message.type === 'assistant')
+      console.log(JSON.stringify({
+        text: assistant?.message?.content?.[0]?.text,
+        uuid: assistant?.uuid ?? null,
+        piEntryId: assistant?._promaPiEntryId ?? null,
+        resultSubtype: messages.at(-1)?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('piEntryId'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      text?: string
+      uuid?: string | null
+      piEntryId?: string | null
+      resultSubtype?: string
+    }
+
+    expect(result.text).toBe('fallback answer')
+    expect(result.uuid).toBeNull()
+    expect(result.piEntryId).toBe('entry-assistant-final')
+    expect(result.resultSubtype).toBe('success')
+  })
+
+  test('Given Pi session has older assistant entries When final text differs slightly Then fallback uses latest session tree entry', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+      import { mkdtempSync, writeFileSync } from 'node:fs'
+      import { join } from 'node:path'
+      import { tmpdir } from 'node:os'
+
+      const sessionId = 'session-pi-latest-entry-fallback'
+      const sessionDir = mkdtempSync(join(tmpdir(), 'proma-pi-latest-entry-'))
+      const sessionFile = join(sessionDir, '2026-06-04T00-00-00-000Z_session-pi-latest-entry-fallback.jsonl')
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: () => {},
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield {
+              type: 'message_end',
+              message: {
+                role: 'assistant',
+                content: [{ type: 'text', text: 'current answer' }],
+                stopReason: 'stop',
+              },
+            }
+            writeFileSync(sessionFile, [
+              JSON.stringify({ type: 'session', version: 3, id: sessionId, timestamp: '2026-06-04T00:00:00.000Z', cwd: '/tmp' }),
+              JSON.stringify({ type: 'message', id: 'entry-old-assistant', parentId: null, timestamp: '2026-06-04T00:00:01.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'old answer' }], timestamp: 1 } }),
+              JSON.stringify({ type: 'message', id: 'entry-current-assistant', parentId: 'entry-old-assistant', timestamp: '2026-06-04T00:00:02.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'current answer with normalized spacing' }], timestamp: 2 } }),
+            ].join('\\n') + '\\n')
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+      const messages = []
+
+      for await (const message of adapter.query({
+        sessionId,
+        prompt: 'hello',
+        model: 'deepseek-v4-flash',
+        runtimeSessionDir: sessionDir,
+      })) {
+        messages.push(message)
+      }
+
+      const assistant = messages.find((message) => message.type === 'assistant')
+      console.log(JSON.stringify({
+        piEntryId: assistant?._promaPiEntryId ?? null,
+        resultSubtype: messages.at(-1)?.subtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('piEntryId'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      piEntryId?: string | null
+      resultSubtype?: string
+    }
+
+    expect(result.piEntryId).toBe('entry-current-assistant')
     expect(result.resultSubtype).toBe('success')
   })
 
