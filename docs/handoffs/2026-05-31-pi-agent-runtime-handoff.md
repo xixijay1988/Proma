@@ -3002,6 +3002,33 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun run electron:build`：通过。
   - `git diff --check`：通过。
 
+## 2026-06-06 Phase J92 Pi RPC long-running turn timeout fix
+
+- 背景：
+  - 测试 Pi Agent 时经常在精确 `1m 0s` 后失败，错误为 `Pi RPC 会话在完成前结束。 exitCode=143 signal=null`。
+  - stdout 中已经出现正常 Pi RPC JSONL 事件，如 `set_thinking_level`、`set_auto_compaction`、`prompt`、`agent_start`、`turn_start`、`message_start`，说明运行时已经启动并进入本轮对话。
+- 根因：
+  - `pi-process.ts` 在每个 Pi RPC 子进程启动后无条件设置了 `FORCE_KILL_DELAY_MS * 60` 的计时器。
+  - `FORCE_KILL_DELAY_MS = 1000`，实际效果是 Proma 会在 60 秒后主动 SIGTERM Pi RPC 子进程。
+  - `exitCode=143` 与 60 秒固定失败时间完全吻合，因此这是 Proma 生命周期控制误杀长任务，不是模型或 provider 失败。
+- 实现：
+  - 移除 Pi RPC 会话的固定生命周期超时，长运行 turn 不再因为 60 秒计时器被 Proma 强制结束。
+  - 保留显式 `abort()` / `kill()` 路径的清理语义：先 SIGTERM，必要时 1 秒后 SIGKILL 兜底，确保用户停止和会话切换仍能回收子进程。
+  - 新增 `getPiRpcSessionLifetimeTimeoutMsForTest()` 测试出口，用例约束 Proma 不再对正常 Pi RPC 会话施加固定 lifetime timeout。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.128`。
+- 当前边界：
+  - 这次只修复固定 60 秒误杀，不改变 provider timeout、Pi runtime 内部 retry/compaction 或用户显式停止行为。
+  - 如果底层 provider 自身超时或 Pi runtime 报错，仍会通过既有错误路径展示。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-process.test.ts -t "fixed lifetime timeout"`：红灯确认缺少测试出口，实施后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-process.test.ts`：11 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts`：49 pass / 0 fail。
+  - `bun test`：315 pass / 0 fail。
+  - `bun run --filter='@proma/electron' typecheck`：通过。
+  - `bun run electron:build`：通过。
+  - `git diff --check`：通过。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

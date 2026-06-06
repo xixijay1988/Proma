@@ -8,6 +8,7 @@ const PI_PACKAGE_NAME = '@earendil-works/pi-coding-agent'
 const PI_CLI_RELATIVE_PATH = ['dist', 'cli.js'] as const
 const MAX_PROCESS_SNIPPET_LENGTH = 800
 const FORCE_KILL_DELAY_MS = 1000
+const PI_RPC_SESSION_LIFETIME_TIMEOUT_MS: number | null = null
 
 export interface PiProcessResult {
   exitCode: number | null
@@ -131,6 +132,10 @@ function createPiJsonlLineSplitter(): PiJsonlLineSplitter {
 
 export function createPiJsonlLineSplitterForTest(): PiJsonlLineSplitter {
   return createPiJsonlLineSplitter()
+}
+
+export function getPiRpcSessionLifetimeTimeoutMsForTest(): number | null {
+  return PI_RPC_SESSION_LIFETIME_TIMEOUT_MS
 }
 
 function createAsyncQueue<T>(): AsyncQueueController<T> {
@@ -335,7 +340,6 @@ export function startPiRpcSession(input: {
   let stderrSnippet = ''
   let aborted = false
   let settled = false
-  let forceKillTimer: NodeJS.Timeout | null = null
 
   const pushLine = (line: string): void => {
     const event = parsePiRpcLine(line)
@@ -372,10 +376,6 @@ export function startPiRpcSession(input: {
 
   const done = new Promise<PiProcessResult>((resolve) => {
     const cleanup = (): void => {
-      if (forceKillTimer) {
-        clearTimeout(forceKillTimer)
-        forceKillTimer = null
-      }
       input.abortSignal?.removeEventListener('abort', abort)
       for (const line of stdoutSplitter.flush()) {
         pushLine(line)
@@ -410,11 +410,6 @@ export function startPiRpcSession(input: {
         aborted,
       })
     })
-
-    forceKillTimer = setTimeout(() => {
-      killRpcChildProcess(child)
-    }, FORCE_KILL_DELAY_MS * 60)
-    forceKillTimer.unref()
   })
 
   return {

@@ -5,6 +5,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   buildPiRpcArgsForTest,
   createPiJsonlLineSplitterForTest,
+  getPiRpcSessionLifetimeTimeoutMsForTest,
   resolvePiCliEntrypointForTest,
   startPiRpcSession,
   type PiRpcEvent,
@@ -59,6 +60,10 @@ describe('pi process integration', () => {
     expect(firstLines).toEqual(['{"type":"message_update","text":"a\\u2028b"}'])
     expect(secondLines).toEqual(['{"type":"agent_end"}'])
     expect(splitter.flush()).toEqual([])
+  })
+
+  test('Given long running Pi RPC session When no user abort occurs Then Proma does not apply a fixed lifetime timeout', () => {
+    expect(getPiRpcSessionLifetimeTimeoutMsForTest()).toBeNull()
   })
 
   test('Given runtime provider and model When building rpc args Then includes provider without api key', () => {
