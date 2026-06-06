@@ -108,6 +108,46 @@ export interface SessionCallbacks {
 
 // ===== 工具函数 =====
 
+const PROMA_PI_ASK_USER_BRIDGE_TITLE = 'PROMA_ASK_USER_QUESTION_BRIDGE'
+
+interface PiStructuredAskUserParseResult {
+  matched: boolean
+  input?: Record<string, unknown>
+}
+
+function parsePiStructuredAskUserInput(request: AgentRuntimeExtensionUiRequest): PiStructuredAskUserParseResult {
+  if (request.method === 'askUserQuestion' && Array.isArray(request.questions)) {
+    return {
+      matched: true,
+      input: {
+        questions: request.questions,
+      },
+    }
+  }
+
+  if (request.method !== 'editor' || request.title !== PROMA_PI_ASK_USER_BRIDGE_TITLE) {
+    return { matched: false }
+  }
+  if (typeof request.prefill !== 'string' || request.prefill.trim().length === 0) {
+    return { matched: true }
+  }
+
+  try {
+    const parsed = JSON.parse(request.prefill) as Record<string, unknown>
+    if (parsed.promaAskUserQuestion !== true || !Array.isArray(parsed.questions)) {
+      return { matched: true }
+    }
+    return {
+      matched: true,
+      input: {
+        questions: parsed.questions,
+      },
+    }
+  } catch {
+    return { matched: true }
+  }
+}
+
 function buildPiExtensionAskUserInput(request: AgentRuntimeExtensionUiRequest): Record<string, unknown> {
   const options = request.method === 'select' && Array.isArray(request.options)
     ? request.options
@@ -141,6 +181,19 @@ function extractFirstAskUserAnswer(updatedInput: Record<string, unknown> | undef
   }
 
   return null
+}
+
+function extractAskUserAnswers(updatedInput: Record<string, unknown> | undefined): Record<string, string> {
+  const answers = updatedInput?.answers
+  if (!answers || typeof answers !== 'object') return {}
+
+  const normalized: Record<string, string> = {}
+  for (const [key, value] of Object.entries(answers)) {
+    if (typeof value === 'string') {
+      normalized[key] = value
+    }
+  }
+  return normalized
 }
 
 function extractTransientPromaEvent(message: SDKMessage): PromaEvent | null {
@@ -949,9 +1002,39 @@ export class AgentOrchestrator {
           return { cancelled: true, reason: result.message }
         }
 
+        case 'askUserQuestion':
         case 'select':
         case 'input':
         case 'editor': {
+          const structuredAskUser = parsePiStructuredAskUserInput(request)
+          if (structuredAskUser.matched) {
+            if (!structuredAskUser.input) {
+              return { cancelled: true, reason: 'Proma AskUser bridge payload 无效' }
+            }
+
+            const result = await askUserService.handleAskUserQuestion(
+              sessionId,
+              structuredAskUser.input,
+              abortSignal,
+              (askUserRequest: AskUserRequest) => {
+                this.eventBus.emit(sessionId, {
+                  kind: 'proma_event',
+                  event: { type: 'ask_user_request', request: askUserRequest },
+                })
+              },
+            )
+            if (result.behavior === 'deny') {
+              return { cancelled: true, reason: result.message }
+            }
+
+            return {
+              value: JSON.stringify({
+                answers: extractAskUserAnswers(result.updatedInput),
+                cancelled: false,
+              }),
+            }
+          }
+
           const result = await askUserService.handleAskUserQuestion(
             sessionId,
             buildPiExtensionAskUserInput(request),

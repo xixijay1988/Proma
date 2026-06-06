@@ -3079,6 +3079,36 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/renderer/components/agent/pi-agent-capabilities-ui.test.ts`：1 pass / 0 fail。
   - `bun test apps/electron/src/renderer/components/agent/pi-runtime-status-ui.test.ts`：红灯确认 `proma:ask_user_bridge_status` 会被前 8 条截断，实施后 3 pass / 0 fail。
 
+## 2026-06-06 Phase J95 Pi structured AskUser bridge
+
+- 背景：
+  - J93 的 `AskUserQuestion` bridge 已能让 Pi 主动向用户提问，但由于 Pi RPC 只原生支持 `select` / `input` / `editor`，结构化 option metadata 会在逐题降级过程中丢失。
+  - Renderer `AskUserBanner` 与 `askUserService` 已经支持 Claude SDK 风格的 `questions[]`、`description`、`preview` 和 `multiSelect`，缺的是 Pi RPC 到 Proma AskUser 的结构化承载协议。
+- 实现：
+  - `pi-ask-user-extension.ts`：
+    - `AskUserQuestion` 改为通过 Proma 私有 envelope 发起一次性结构化请求：`ctx.ui.editor('PROMA_ASK_USER_QUESTION_BRIDGE', JSON.stringify({ promaAskUserQuestion: true, questions }))`。
+    - Proma 返回 JSON 字符串后，extension 解析 `answers` 并以工具结果返回给 Pi runtime。
+    - 保留 `proma:ask_user_bridge_status` command，并更新说明为结构化 AskUser 请求会进入 Proma `AskUserBanner`。
+  - `agent-orchestrator.ts`：
+    - 新增 Proma AskUser envelope 解析，识别 `PROMA_ASK_USER_QUESTION_BRIDGE` 后直接调用 `askUserService.handleAskUserQuestion()`，完整保留 `questions/options/description/preview/multiSelect`。
+    - 对未来可能出现的 `method: 'askUserQuestion'` 做兼容分支。
+    - envelope payload 损坏时直接返回 `{ cancelled: true, reason: 'Proma AskUser bridge payload 无效' }`，避免退回普通 editor 流程卡住用户交互。
+  - `pi-agent-adapter.ts`：
+    - 将 `askUserQuestion` 视为可等待 dialog method；无 handler 时会返回 cancelled，避免 Pi runtime 挂起等待响应。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.131`。
+- 当前边界：
+  - 这是 Proma 私有 envelope 兼容方案，不需要改 Pi 上游 RPC 协议。
+  - 多选答案仍沿用现有 `AskUserBanner` 行为，以逗号拼接字符串回传；如果未来要完全数组化，需要扩展 `AskUserResponse` 类型和 renderer 提交流程。
+  - `ctx.ui.custom()` 在 Pi RPC mode 仍不可用，不能用于 Proma 桌面结构化 UI。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "structured AskUser bridge"`：红灯确认旧路径只返回普通字符串，实施后通过。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "malformed pi structured AskUser"`：红灯确认坏 payload 会卡住 pending AskUser，实施后通过。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "structured ask user request without handler"`：红灯确认 `askUserQuestion` 无 handler 时不回包，实施后通过。
+  - `bun test apps/electron/src/main/lib/adapters/pi-ask-user-extension.test.ts`：2 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "extension|structured ask user"`：3 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "extension|structured AskUser|AskUser"`：9 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

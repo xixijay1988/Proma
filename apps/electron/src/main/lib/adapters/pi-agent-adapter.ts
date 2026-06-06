@@ -905,7 +905,7 @@ function normalizePiQueueMode(mode: string): string {
 }
 
 function isExtensionUiDialogMethod(method: string): boolean {
-  return method === 'confirm' || method === 'select' || method === 'input' || method === 'editor'
+  return method === 'confirm' || method === 'select' || method === 'input' || method === 'editor' || method === 'askUserQuestion'
 }
 
 function createExtensionUiResponse(

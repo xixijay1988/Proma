@@ -16,8 +16,9 @@ describe('pi ask user extension', () => {
       expect(result.extensionPath).toContain('proma-ask-user-bridge.mjs')
       expect(source).toContain("name: 'AskUserQuestion'")
       expect(source).toContain('Ask the user one or more questions')
-      expect(source).toContain('ctx.ui.select')
-      expect(source).toContain('ctx.ui.input')
+      expect(source).toContain('PROMA_ASK_USER_QUESTION_BRIDGE')
+      expect(source).toContain('promaAskUserQuestion')
+      expect(source).toContain('JSON.parse')
       expect(source).toContain('ctx.ui.editor')
       expect(source).toContain('answers')
     } finally {

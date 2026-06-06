@@ -1779,6 +1779,244 @@ describe('AgentOrchestrator pi routing', () => {
     expect(result.completeResultSubtype).toBe('success')
   })
 
+  test('Given pi structured AskUser bridge request When user answers Then preserves option metadata and returns JSON answers', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+      const { askUserService } = await import('./agent-ask-user-service.ts')
+
+      class FakePiAdapter {
+        extensionResult = null
+
+        async *query(input) {
+          this.extensionResult = await input.handleExtensionUiRequest?.({
+            type: 'extension_ui_request',
+            id: 'pi-structured-ask-user-1',
+            method: 'editor',
+            title: 'PROMA_ASK_USER_QUESTION_BRIDGE',
+            prefill: JSON.stringify({
+              promaAskUserQuestion: true,
+              questions: [
+                {
+                  question: '选择实现策略',
+                  header: '方案选择',
+                  options: [
+                    {
+                      label: '增量实现',
+                      description: '先补最小闭环',
+                      preview: '**推荐**：风险更低',
+                    },
+                    {
+                      label: '一次性重构',
+                      description: '同时改协议和 UI',
+                      preview: '影响面更大',
+                    },
+                  ],
+                  multiSelect: true,
+                },
+              ],
+            }),
+          })
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const adapter = new FakePiAdapter()
+      const eventBus = new AgentEventBus()
+      let askUserRequest = null
+      let resolvedSessionId = null
+
+      eventBus.use((sessionId, payload, next) => {
+        if (payload.kind === 'proma_event' && payload.event.type === 'ask_user_request') {
+          askUserRequest = payload.event.request
+          queueMicrotask(() => {
+            resolvedSessionId = askUserService.respondToAskUser(askUserRequest.requestId, {
+              '选择实现策略': '增量实现,一次性重构',
+            })
+          })
+        }
+        next()
+      })
+
+      const orchestrator = new AgentOrchestrator(adapter, eventBus, 'pi')
+      let completeResultSubtype = null
+
+      await orchestrator.sendMessage({
+        sessionId: 'session-pi-structured-ask-user',
+        userMessage: 'hello',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        startedAt: 792,
+      }, {
+        onError: () => {},
+        onComplete: (_messages, opts) => { completeResultSubtype = opts?.resultSubtype ?? null },
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      function parseReturnedPayload(value) {
+        try {
+          return JSON.parse(value ?? '{}')
+        } catch {
+          return { parseError: true, raw: value ?? null }
+        }
+      }
+
+      console.log(JSON.stringify({
+        extensionResult: adapter.extensionResult,
+        returnedPayload: parseReturnedPayload(adapter.extensionResult?.value),
+        askUserQuestion: askUserRequest?.questions[0]?.question ?? null,
+        askUserHeader: askUserRequest?.questions[0]?.header ?? null,
+        askUserMultiSelect: askUserRequest?.questions[0]?.multiSelect ?? null,
+        askUserOptions: askUserRequest?.questions[0]?.options ?? [],
+        resolvedSessionId,
+        completeResultSubtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('returnedPayload'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      extensionResult?: { value?: string; cancelled?: boolean }
+      returnedPayload?: { answers?: Record<string, string>; cancelled?: boolean }
+      askUserQuestion?: string | null
+      askUserHeader?: string | null
+      askUserMultiSelect?: boolean | null
+      askUserOptions?: Array<{ label?: string; description?: string; preview?: string }>
+      resolvedSessionId?: string | null
+      completeResultSubtype?: string | null
+    }
+
+    expect(result.extensionResult?.cancelled).toBeUndefined()
+    expect(result.returnedPayload).toEqual({
+      answers: { '选择实现策略': '增量实现,一次性重构' },
+      cancelled: false,
+    })
+    expect(result.askUserQuestion).toBe('选择实现策略')
+    expect(result.askUserHeader).toBe('方案选择')
+    expect(result.askUserMultiSelect).toBe(true)
+    expect(result.askUserOptions).toEqual([
+      {
+        label: '增量实现',
+        description: '先补最小闭环',
+        preview: '**推荐**：风险更低',
+      },
+      {
+        label: '一次性重构',
+        description: '同时改协议和 UI',
+        preview: '影响面更大',
+      },
+    ])
+    expect(result.resolvedSessionId).toBe('session-pi-structured-ask-user')
+    expect(result.completeResultSubtype).toBe('success')
+  })
+
+  test('Given malformed pi structured AskUser bridge request When handled Then cancels without surfacing AskUser UI', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+
+      class FakePiAdapter {
+        extensionResult = null
+
+        async *query(input) {
+          this.extensionResult = await input.handleExtensionUiRequest?.({
+            type: 'extension_ui_request',
+            id: 'pi-structured-ask-user-bad',
+            method: 'editor',
+            title: 'PROMA_ASK_USER_QUESTION_BRIDGE',
+            prefill: '{bad json',
+          })
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const adapter = new FakePiAdapter()
+      const eventBus = new AgentEventBus()
+      let askUserRequestCount = 0
+
+      eventBus.use((sessionId, payload, next) => {
+        if (payload.kind === 'proma_event' && payload.event.type === 'ask_user_request') {
+          askUserRequestCount += 1
+        }
+        next()
+      })
+
+      const orchestrator = new AgentOrchestrator(adapter, eventBus, 'pi')
+
+      await orchestrator.sendMessage({
+        sessionId: 'session-pi-structured-ask-user-bad',
+        userMessage: 'hello',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        startedAt: 793,
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      console.log(JSON.stringify({
+        extensionResult: adapter.extensionResult,
+        askUserRequestCount,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('askUserRequestCount'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      extensionResult?: { cancelled?: boolean; reason?: string }
+      askUserRequestCount?: number
+    }
+
+    expect(result.extensionResult).toEqual({
+      cancelled: true,
+      reason: 'Proma AskUser bridge payload 无效',
+    })
+    expect(result.askUserRequestCount).toBe(0)
+  })
+
   test('Given pi engine and message persistence fails When sending message Then releases active session', () => {
     const output = runOrchestratorScript(`
       import { mock } from 'bun:test'

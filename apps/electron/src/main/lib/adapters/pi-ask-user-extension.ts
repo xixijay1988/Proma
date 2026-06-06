@@ -47,6 +47,8 @@ const QuestionSchema = Type.Object({
   multiSelect: Type.Optional(Type.Boolean({ description: 'Whether multiple options may be selected. Proma Pi bridge returns a comma-separated answer.' })),
 })
 
+const PROMA_ASK_USER_BRIDGE_TITLE = 'PROMA_ASK_USER_QUESTION_BRIDGE'
+
 function normalizeText(value) {
   return typeof value === 'string' ? value.trim() : ''
 }
@@ -60,37 +62,6 @@ function normalizeOptions(value) {
       preview: normalizeText(item?.preview),
     }))
     .filter((item) => item.label)
-}
-
-function questionKey(question, index) {
-  const text = normalizeText(question.question)
-  return text || 'question_' + (index + 1)
-}
-
-function selectionPrompt(question, index) {
-  const header = normalizeText(question.header)
-  const key = questionKey(question, index)
-  return header && header !== key ? header + '\\n' + key : key
-}
-
-function formatOptionLines(options) {
-  return options.map((option, index) => {
-    const detail = option.description || option.preview
-    return detail
-      ? String(index + 1) + '. ' + option.label + ' — ' + detail
-      : String(index + 1) + '. ' + option.label
-  })
-}
-
-function formatEditorPrompt(question, index, options) {
-  const lines = [questionKey(question, index)]
-  if (options.length > 0) {
-    lines.push('', '可选项：', ...formatOptionLines(options))
-  }
-  if (question.multiSelect) {
-    lines.push('', '可选择多个选项，用逗号分隔；也可以输入自定义答案。')
-  }
-  return lines.join('\\n')
 }
 
 function errorResult(message, questions = []) {
@@ -108,30 +79,56 @@ function successResult(answers, questions) {
   }
 }
 
+function normalizeQuestion(question) {
+  const options = normalizeOptions(question?.options)
+  return {
+    question: normalizeText(question?.question),
+    header: normalizeText(question?.header) || undefined,
+    placeholder: normalizeText(question?.placeholder) || undefined,
+    prefill: typeof question?.prefill === 'string' ? question.prefill : undefined,
+    options,
+    multiSelect: question?.multiSelect === true,
+  }
+}
+
+function normalizeQuestions(value) {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((question) => normalizeQuestion(question))
+    .filter((question) => question.question)
+}
+
+function parseStructuredBridgeResponse(value) {
+  if (typeof value !== 'string' || value.trim().length === 0) return null
+  try {
+    const parsed = JSON.parse(value)
+    if (!parsed || typeof parsed !== 'object') return null
+    const answers = parsed.answers && typeof parsed.answers === 'object' ? parsed.answers : {}
+    return {
+      answers,
+      cancelled: parsed.cancelled === true,
+    }
+  } catch {
+    return null
+  }
+}
+
 function formatAskUserBridgeStatus() {
   return [
     'Proma Pi AskUser bridge 已加载。',
     '- AskUserQuestion: Ask the user one or more questions and wait for their answer.',
-    '- select/input/editor requests are surfaced through Proma AskUserBanner in the desktop UI.',
+    '- Structured AskUserQuestion requests are surfaced through Proma AskUserBanner in the desktop UI.',
   ].join('\\n')
 }
 
-async function askSingleQuestion(question, index, ctx) {
-  const options = normalizeOptions(question.options)
-  const title = selectionPrompt(question, index)
-
-  if (options.length > 0 && question.multiSelect !== true) {
-    const selected = await ctx.ui.select(title, options.map((option) => option.label))
-    return normalizeText(selected)
-  }
-
-  if (question.multiSelect === true || normalizeText(question.prefill)) {
-    const edited = await ctx.ui.editor(formatEditorPrompt(question, index, options), normalizeText(question.prefill))
-    return normalizeText(edited)
-  }
-
-  const value = await ctx.ui.input(questionKey(question, index), normalizeText(question.placeholder))
-  return normalizeText(value)
+async function askQuestions(questions, ctx) {
+  const value = await ctx.ui.editor(
+    PROMA_ASK_USER_BRIDGE_TITLE,
+    JSON.stringify({ promaAskUserQuestion: true, questions }),
+  )
+  const parsed = parseStructuredBridgeResponse(value)
+  if (!parsed || parsed.cancelled) return null
+  return parsed.answers
 }
 
 export default function (pi) {
@@ -151,21 +148,20 @@ export default function (pi) {
         return errorResult('AskUserQuestion failed: no questions provided.', [])
       }
 
-      const answers = {}
-      for (let index = 0; index < params.questions.length; index += 1) {
-        const question = params.questions[index]
-        const key = questionKey(question, index)
-        const answer = await askSingleQuestion(question, index, ctx)
-        if (!answer) {
-          return {
-            content: [{ type: 'text', text: 'AskUserQuestion cancelled by the user.' }],
-            details: { answers, questions: params.questions, cancelled: true },
-          }
-        }
-        answers[key] = answer
+      const questions = normalizeQuestions(params.questions)
+      if (questions.length === 0) {
+        return errorResult('AskUserQuestion failed: no valid questions provided.', [])
       }
 
-      return successResult(answers, params.questions)
+      const answers = await askQuestions(questions, ctx)
+      if (!answers) {
+        return {
+          content: [{ type: 'text', text: 'AskUserQuestion cancelled by the user.' }],
+          details: { answers: {}, questions, cancelled: true },
+        }
+      }
+
+      return successResult(answers, questions)
     },
   })
 

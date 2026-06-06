@@ -3549,6 +3549,60 @@ describe('PiAgentAdapter', () => {
     })
   })
 
+  test('Given structured ask user request without handler When query runs Then writes cancelled extension response', () => {
+    const output = runPiAdapterScript(`
+      import { mock } from 'bun:test'
+
+      const sentCommands = []
+
+      mock.module('./pi-process', () => ({
+        startPiRpcSession: () => ({
+          send: (command) => { sentCommands.push(command) },
+          abort: () => {},
+          kill: () => {},
+          done: Promise.resolve({
+            exitCode: 0,
+            signal: null,
+            stdoutSnippet: '',
+            stderrSnippet: '',
+            aborted: false,
+          }),
+          events: (async function* () {
+            yield {
+              type: 'extension_ui_request',
+              id: 'ask-user-1',
+              method: 'askUserQuestion',
+              questions: [{ question: '选择方案', options: [{ label: 'A' }] }],
+            }
+            yield { type: 'agent_end', messages: [] }
+          })(),
+        }),
+      }))
+
+      const { PiAgentAdapter } = await import('./pi-agent-adapter.ts')
+      const adapter = new PiAgentAdapter()
+
+      for await (const _message of adapter.query({
+        sessionId: 'session-pi-adapter-ask-user-no-handler',
+        prompt: 'hello',
+        model: 'pi-model',
+      })) {}
+
+      console.log(JSON.stringify({ sentCommands }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('sentCommands'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      sentCommands?: Array<{ type?: string; id?: string; cancelled?: boolean }>
+    }
+
+    expect(result.sentCommands?.[1]).toEqual({
+      type: 'extension_ui_response',
+      id: 'ask-user-1',
+      cancelled: true,
+    })
+  })
+
   test('Given runtime extension path When query starts Then passes it to Pi process', () => {
     const output = runPiAdapterScript(`
       import { mock } from 'bun:test'
