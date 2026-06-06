@@ -82,6 +82,7 @@ import { buildPiMcpBridgeListToolsToolName, buildPiMcpBridgeRemoteToolPattern, b
 import { ensurePiMemoryExtension } from './adapters/pi-memory-extension'
 import { ensurePiNanoBananaExtension } from './adapters/pi-nano-banana-extension'
 import { ensurePiTaskExtension } from './adapters/pi-task-extension'
+import { ensurePiAskUserExtension } from './adapters/pi-ask-user-extension'
 import { ensurePiGitCheckpointExtension, findPiGitCheckpointForEntry } from './adapters/pi-git-checkpoint-extension'
 import { getToolCredentials, getToolState } from './chat-tool-config'
 import { resolveExistingSessionAgentEngine } from './agent-engine'
@@ -283,6 +284,7 @@ function buildPiCapabilityBoundaryPrompt(input: {
     '每个 MCP 服务器都会保留 mcp__<server>__list_tools 和 mcp__<server>__call_tool 作为兜底；list_tools 用于查看远端工具名和 inputSchema，call_tool 通过 toolName 和 arguments 调用。',
     '这不是 Claude Agent SDK 的 MCP 深度注入；请如实说明当前是 Proma 为 Pi 生成的 MCP bridge。若用户要求配置 MCP，可以编辑对应 mcp.json；若用户要求调用 MCP，请优先使用逐工具 Pi MCP bridge 工具，必要时使用下方服务器级兜底工具。',
     'Proma 已将可用 Skills 通过 Pi 原生 --skill loader 加载到当前 Pi RPC 会话。你可以依据 Pi <available_skills> 中的描述按需读取对应 SKILL.md；用户明确引用 Skill 时，应主动按该 Skill 指令执行，但不要声称它是 Claude SDK Skill 调用。',
+    'Proma 已为 Pi 加载 Claude SDK 语义兼容的 AskUserQuestion bridge。需要用户偏好、需求澄清、方案选择或非权限类决策时，必须调用 AskUserQuestion 暂停并等待用户回答；不要用普通文字自行替用户做选择。',
     input.workspaceName ? `Workspace: ${input.workspaceName}` : 'Workspace: 未选择',
     input.workspaceSlug ? `Workspace slug: ${input.workspaceSlug}` : 'Workspace slug: 未选择',
     input.workspacePath ? `Workspace path: ${input.workspacePath}` : 'Workspace path: 未选择',
@@ -1071,9 +1073,13 @@ export class AgentOrchestrator {
     const piTaskExtension = ensurePiTaskExtension({
       configDir: piRuntimeConfig.configDir,
     })
+    const piAskUserExtension = ensurePiAskUserExtension({
+      configDir: piRuntimeConfig.configDir,
+    })
     const piRuntimeExtensionPaths = [
       piPermissionExtensionPath,
       piTaskExtension.extensionPath,
+      piAskUserExtension.extensionPath,
       ...(piMemoryExtension ? [piMemoryExtension.extensionPath] : []),
       ...(piNanoBananaExtension ? [piNanoBananaExtension.extensionPath] : []),
       ...(piMcpExtensionPath ? [piMcpExtensionPath] : []),
@@ -1125,6 +1131,7 @@ export class AgentOrchestrator {
       piMcpBridgeToolNames,
       piBuiltinMcpToolNames: [
         ...piTaskExtension.toolNames,
+        ...piAskUserExtension.toolNames,
         ...(piMemoryExtension?.toolNames ?? []),
         ...(piNanoBananaExtension?.toolNames ?? []),
       ],

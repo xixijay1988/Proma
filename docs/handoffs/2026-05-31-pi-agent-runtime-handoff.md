@@ -3029,6 +3029,34 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun run electron:build`：通过。
   - `git diff --check`：通过。
 
+## 2026-06-06 Phase J93 Pi AskUserQuestion bridge parity
+
+- 背景：
+  - Claude SDK 模式下模型可以通过 `AskUserQuestion` 暂停并让用户选择方案或补充输入。
+  - Pi Agent 之前只桥接了 Pi runtime 自身发出的 `extension_ui_request`（`select` / `input` / `editor`），缺少一个与 Claude SDK 同名、可被模型主动调用的 AskUser 工具。
+- 实现：
+  - 新增 `pi-ask-user-extension.ts`：
+    - 生成 `proma-ask-user-bridge.mjs`，注册 Pi 原生工具 `AskUserQuestion`。
+    - 工具参数沿用 Claude SDK 语义：`questions[]`、`question`、`header`、`placeholder`、`prefill`、`options[]`、`multiSelect`。
+    - 单选问题走 Pi `ctx.ui.select`，自由输入走 `ctx.ui.input`，带 prefill 或 multiSelect 的问题走 `ctx.ui.editor`；这些请求会通过现有 Proma extension UI bridge 进入 `AskUserBanner`。
+    - 额外注册 `proma:ask_user_bridge_status` command，便于 Pi runtime 状态中证明 bridge 已加载。
+  - `agent-orchestrator.ts`：
+    - Pi runtime 每次启动时自动加载 AskUser bridge extension。
+    - 将 `AskUserQuestion` 加入 Proma 内置 Pi bridge 工具清单。
+    - 在 Pi capability boundary 中新增系统引导：需要用户偏好、需求澄清、方案选择或非权限类决策时，必须调用 `AskUserQuestion` 等待用户回答，不要替用户做选择。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.129`。
+- 当前边界：
+  - Pi 的 `ctx.ui.select` 原生只支持字符串选项，Proma option description / preview 还不能完整透传到选择 UI。
+  - `multiSelect` 目前通过 editor 输入逗号分隔答案实现，不是独立多选控件。
+  - 这次补齐的是 Pi 可主动调用 AskUser 的工具语义和提示词引导；模型是否调用仍取决于提示遵循与任务上下文。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/adapters/pi-ask-user-extension.test.ts`：红灯确认缺少 extension，实施后 2 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "parity tools"`：红灯确认未加载 AskUser bridge，实施后 1 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts`：37 pass / 0 fail。
+  - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts`：49 pass / 0 fail。
+  - `bun run --filter='@proma/electron' typecheck`：通过。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

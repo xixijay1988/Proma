@@ -2510,9 +2510,10 @@ describe('AgentOrchestrator pi routing', () => {
     expect(result.prompt).toContain('Find bugs before summaries.')
     expect(result.prompt).toContain('<skill name="using-superpowers"')
     expect(result.prompt).toContain('Always load relevant skills first.')
-    expect(result.extensionCount).toBe(4)
+    expect(result.extensionCount).toBe(5)
     expect(result.extensionPaths?.some((path) => path.includes('proma-permission-bridge.mjs'))).toBe(true)
     expect(result.extensionPaths?.some((path) => path.includes('proma-task-bridge.mjs'))).toBe(true)
+    expect(result.extensionPaths?.some((path) => path.includes('proma-ask-user-bridge.mjs'))).toBe(true)
     expect(result.extensionPaths?.some((path) => path.includes('proma-mcp-bridge.mjs'))).toBe(true)
     expect(result.extensionPaths?.some((path) => path.includes('proma-git-checkpoint.mjs'))).toBe(true)
     expect(result.skillPaths?.some((path) => path.endsWith('/agent-workspaces/pi-workspace/skills'))).toBe(true)
@@ -2607,8 +2608,9 @@ describe('AgentOrchestrator pi routing', () => {
       memoryKey?: string | null
     }
 
-    expect(result.extensionCount).toBe(4)
+    expect(result.extensionCount).toBe(5)
     expect(result.extensionPaths?.some((path) => path.includes('proma-task-bridge.mjs'))).toBe(true)
+    expect(result.extensionPaths?.some((path) => path.includes('proma-ask-user-bridge.mjs'))).toBe(true)
     expect(result.extensionPaths?.some((path) => path.includes('proma-memory-bridge.mjs'))).toBe(true)
     expect(result.memoryKey).toBe('sk-memory-secret')
     expect(result.prompt).toContain('mcp__mem__recall_memory')
@@ -2797,15 +2799,16 @@ describe('AgentOrchestrator pi routing', () => {
       nanoKey?: string | null
     }
 
-    expect(result.extensionCount).toBe(4)
+    expect(result.extensionCount).toBe(5)
     expect(result.extensionPaths?.some((path) => path.includes('proma-task-bridge.mjs'))).toBe(true)
+    expect(result.extensionPaths?.some((path) => path.includes('proma-ask-user-bridge.mjs'))).toBe(true)
     expect(result.extensionPaths?.some((path) => path.includes('proma-nano-banana-bridge.mjs'))).toBe(true)
     expect(result.nanoKey).toBe('sk-nano-secret')
     expect(result.prompt).toContain('mcp__nano_banana__generate_image')
     expect(result.prompt).not.toContain('sk-nano-secret')
   })
 
-  test('Given pi workspace When sending message Then loads Pi task extension and advertises task tools', () => {
+  test('Given pi workspace When sending message Then loads Pi task and ask user extensions and advertises parity tools', () => {
     const output = runOrchestratorScript(`
       import { mock } from 'bun:test'
 
@@ -2855,8 +2858,8 @@ describe('AgentOrchestrator pi routing', () => {
       const orchestrator = new AgentOrchestrator(adapter, new AgentEventBus(), 'pi')
 
       await orchestrator.sendMessage({
-        sessionId: 'session-pi-task-tools',
-        userMessage: '请分步骤完成这个任务',
+        sessionId: 'session-pi-parity-tools',
+        userMessage: '请分步骤完成这个任务，如果有多个方案请让我选择',
         channelId: 'missing-channel',
         modelId: 'pi-model',
         workspaceId: 'workspace-pi',
@@ -2883,10 +2886,14 @@ describe('AgentOrchestrator pi routing', () => {
     }
 
     expect(result.extensionPaths?.some((path) => path.includes('proma-task-bridge.mjs'))).toBe(true)
+    expect(result.extensionPaths?.some((path) => path.includes('proma-ask-user-bridge.mjs'))).toBe(true)
     expect(result.prompt).toContain('TaskCreate')
     expect(result.prompt).toContain('TaskUpdate')
     expect(result.prompt).toContain('TaskGet')
     expect(result.prompt).toContain('TaskList')
+    expect(result.prompt).toContain('AskUserQuestion')
+    expect(result.prompt).toContain('需要用户偏好')
+    expect(result.prompt).toContain('必须调用 AskUserQuestion')
   })
 
   test('Given pi permission request is always allowed When requested again Then skips second prompt', () => {
