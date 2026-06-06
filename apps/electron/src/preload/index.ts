@@ -78,6 +78,7 @@ import type {
   PermissionResponse,
   PromaPermissionMode,
   AskUserRequest,
+  AskUserCancelInput,
   AskUserResponse,
   ExitPlanModeResponse,
   SystemPromptConfig,
@@ -658,6 +659,8 @@ export interface ElectronAPI {
 
   /** 响应 AskUser 请求 */
   respondAskUser: (response: AskUserResponse) => Promise<void>
+  /** 取消 AskUser 请求 */
+  cancelAskUser: (input: AskUserCancelInput) => Promise<void>
 
   // ===== ExitPlanMode 计划审批 =====
 
@@ -1749,6 +1752,10 @@ const electronAPI: ElectronAPI = {
   // AskUserQuestion 交互式问答
   respondAskUser: (response: AskUserResponse) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.ASK_USER_RESPOND, response)
+  },
+
+  cancelAskUser: (input: AskUserCancelInput) => {
+    return ipcRenderer.invoke(AGENT_IPC_CHANNELS.ASK_USER_CANCEL, input)
   },
 
   // ExitPlanMode 计划审批

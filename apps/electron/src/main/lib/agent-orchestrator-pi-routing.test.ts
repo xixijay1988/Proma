@@ -2017,6 +2017,104 @@ describe('AgentOrchestrator pi routing', () => {
     expect(result.askUserRequestCount).toBe(0)
   })
 
+  test('Given pi structured AskUser bridge request When user cancels Then returns cancelled response without stopping session', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+      const { askUserService } = await import('./agent-ask-user-service.ts')
+
+      class FakePiAdapter {
+        extensionResult = null
+
+        async *query(input) {
+          this.extensionResult = await input.handleExtensionUiRequest?.({
+            type: 'extension_ui_request',
+            id: 'pi-structured-ask-user-cancel',
+            method: 'editor',
+            title: 'PROMA_ASK_USER_QUESTION_BRIDGE',
+            prefill: JSON.stringify({
+              promaAskUserQuestion: true,
+              questions: [{ question: '是否继续？', options: [{ label: '继续' }] }],
+            }),
+          })
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const adapter = new FakePiAdapter()
+      const eventBus = new AgentEventBus()
+      let askUserRequest = null
+      let cancelledSessionId = null
+
+      eventBus.use((sessionId, payload, next) => {
+        if (payload.kind === 'proma_event' && payload.event.type === 'ask_user_request') {
+          askUserRequest = payload.event.request
+          queueMicrotask(() => {
+            cancelledSessionId = askUserService.cancelAskUser(askUserRequest.requestId, '用户取消了 AskUserQuestion')
+          })
+        }
+        next()
+      })
+
+      const orchestrator = new AgentOrchestrator(adapter, eventBus, 'pi')
+      let completeResultSubtype = null
+
+      await orchestrator.sendMessage({
+        sessionId: 'session-pi-structured-ask-user-cancel',
+        userMessage: 'hello',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        startedAt: 794,
+      }, {
+        onError: () => {},
+        onComplete: (_messages, opts) => { completeResultSubtype = opts?.resultSubtype ?? null },
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      console.log(JSON.stringify({
+        extensionResult: adapter.extensionResult,
+        cancelledSessionId,
+        completeResultSubtype,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('cancelledSessionId'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      extensionResult?: { cancelled?: boolean; reason?: string }
+      cancelledSessionId?: string | null
+      completeResultSubtype?: string | null
+    }
+
+    expect(result.extensionResult).toEqual({
+      cancelled: true,
+      reason: '用户取消了 AskUserQuestion',
+    })
+    expect(result.cancelledSessionId).toBe('session-pi-structured-ask-user-cancel')
+    expect(result.completeResultSubtype).toBe('success')
+  })
+
   test('Given pi engine and message persistence fails When sending message Then releases active session', () => {
     const output = runOrchestratorScript(`
       import { mock } from 'bun:test'

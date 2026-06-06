@@ -102,6 +102,21 @@ export class AgentAskUserService {
   }
 
   /**
+   * 取消单个 AskUser 请求（由渲染进程关闭问答横幅触发）
+   *
+   * @returns 对应的 sessionId，用于向渲染进程发送 resolved 事件；未找到返回 null
+   */
+  cancelAskUser(requestId: string, message = '用户取消了 AskUserQuestion'): string | null {
+    const pending = this.pendingRequests.get(requestId)
+    if (!pending) return null
+
+    const sessionId = pending.request.sessionId
+    pending.resolve({ behavior: 'deny', message })
+    this.pendingRequests.delete(requestId)
+    return sessionId
+  }
+
+  /**
    * 获取当前所有待处理的 AskUser 请求（用于渲染进程重载后恢复状态）
    */
   getPendingRequests(): AskUserRequest[] {

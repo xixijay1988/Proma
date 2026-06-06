@@ -1367,6 +1367,14 @@ export interface AskUserResponse {
   answers: Record<string, string>
 }
 
+/** AskUser 取消输入（渲染进程 → 主进程） */
+export interface AskUserCancelInput {
+  /** 请求 ID */
+  requestId: string
+  /** 可选取消原因 */
+  reason?: string
+}
+
 // ===== ExitPlanMode 计划审批类型 =====
 
 /** ExitPlanMode SDK 工具输入中的 allowedPrompts 项 */
@@ -1722,6 +1730,8 @@ export const AGENT_IPC_CHANNELS = {
   // AskUserQuestion 交互式问答
   /** AskUser 响应（渲染进程 → 主进程） */
   ASK_USER_RESPOND: 'agent:ask-user:respond',
+  /** AskUser 取消（渲染进程 → 主进程） */
+  ASK_USER_CANCEL: 'agent:ask-user:cancel',
 
   // ExitPlanMode 计划审批
   /** ExitPlanMode 响应（渲染进程 → 主进程） */

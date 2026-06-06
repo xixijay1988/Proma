@@ -3109,6 +3109,34 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts -t "extension|structured ask user"`：3 pass / 0 fail。
   - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "extension|structured AskUser|AskUser"`：9 pass / 0 fail。
 
+## 2026-06-06 Phase J96 AskUser per-request cancel
+
+- 背景：
+  - J95 后 Pi `AskUserQuestion` 已能结构化进入 Proma `AskUserBanner`，但用户点击横幅右上角 X 时，前端会直接清掉整个 session 的 AskUser 队列并调用 `stopAgent(sessionId)`。
+  - 这种行为会把“取消当前问题”升级成“停止整个 Agent”，与 Claude SDK 风格的交互式工具取消语义不一致。
+- 实现：
+  - `agent-ask-user-service.ts`：
+    - 新增 `cancelAskUser(requestId, message)`，只取消单个 pending AskUser Promise，返回对应 `sessionId`。
+    - 取消结果以 `{ behavior: 'deny', message }` 进入既有 AskUser 等待链路，Pi structured AskUser bridge 会收到 `{ cancelled: true, reason }`。
+  - IPC 四段链路：
+    - `@proma/shared` 新增 `AskUserCancelInput` 和 `AGENT_IPC_CHANNELS.ASK_USER_CANCEL`。
+    - `ipc.ts` 注册 `ASK_USER_CANCEL`，取消后广播 `ask_user_resolved`。
+    - `preload/index.ts` 暴露 `window.electronAPI.cancelAskUser()`。
+  - Renderer：
+    - `AskUserBanner` 的 X 改为调用 `cancelAskUser({ requestId, reason })`，不再直接 `stopAgent(sessionId)`，也不再把 streaming state 标为 stopped。
+    - `useGlobalAgentListeners` 处理 `ask_user_resolved`，从 `allPendingAskUserRequestsAtom` 中移除对应 request；响应和取消共用同一出队路径。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.132`。
+- 当前边界：
+  - 这次补的是 AskUser 的 per-request cancel；PermissionBanner / ExitPlanModeBanner 的 X 仍保持“关闭并终止 Agent”的旧语义，后续可单独评估是否也要细化。
+  - 多选答案仍是逗号拼接字符串，数组化留给后续 J97。
+- 已运行：
+  - `bun test apps/electron/src/main/lib/agent-ask-user-service.test.ts`：红灯确认缺少 per-request cancel，实施后通过。
+  - `bun test apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "user cancels"`：覆盖 Pi structured AskUser 取消后返回 cancelled 且不停止 session。
+  - `bun run --filter='@proma/electron' typecheck`：通过。
+  - `bun test apps/electron/src/main/lib/agent-ask-user-service.test.ts apps/electron/src/main/lib/agent-orchestrator-pi-routing.test.ts -t "AskUser|user cancels"`：5 pass / 0 fail。
+  - `git diff --check`：通过。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。

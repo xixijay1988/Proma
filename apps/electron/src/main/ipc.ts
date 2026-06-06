@@ -85,6 +85,7 @@ import type {
   GitHubReleaseListOptions,
   PermissionResponse,
   PromaPermissionMode,
+  AskUserCancelInput,
   AskUserResponse,
   ExitPlanModeResponse,
   SystemPromptConfig,
@@ -2411,6 +2412,22 @@ export function registerIpcHandlers(): void {
     async (event, response: AskUserResponse): Promise<void> => {
       const { requestId, answers } = response
       const sessionId = askUserService.respondToAskUser(requestId, answers)
+
+      if (sessionId) {
+        event.sender.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {
+          sessionId,
+          payload: { kind: 'proma_event', event: { type: 'ask_user_resolved', requestId } },
+        })
+      }
+    }
+  )
+
+  // 取消 AskUser 请求
+  ipcMain.handle(
+    AGENT_IPC_CHANNELS.ASK_USER_CANCEL,
+    async (event, input: AskUserCancelInput): Promise<void> => {
+      const { requestId, reason } = input
+      const sessionId = askUserService.cancelAskUser(requestId, reason)
 
       if (sessionId) {
         event.sender.send(AGENT_IPC_CHANNELS.STREAM_EVENT, {

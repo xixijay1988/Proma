@@ -832,6 +832,16 @@ export function useGlobalAgentListeners(): void {
               event.request.questions[0]?.question ?? 'Agent 有问题需要你回答',
               'permissionRequest'
             )
+          } else if (event.type === 'ask_user_resolved') {
+            // AskUser 请求出队（响应和取消共用）
+            store.set(allPendingAskUserRequestsAtom, (prev) => {
+              const current = prev.get(sessionId) ?? []
+              const nextRequests = current.filter((request) => request.requestId !== event.requestId)
+              const map = new Map(prev)
+              if (nextRequests.length === 0) map.delete(sessionId)
+              else map.set(sessionId, nextRequests)
+              return map
+            })
           } else if (event.type === 'exit_plan_mode_request') {
             // ExitPlanMode 请求入队
             store.set(allPendingExitPlanRequestsAtom, (prev) => {
