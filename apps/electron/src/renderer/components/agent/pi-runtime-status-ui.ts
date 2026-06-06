@@ -21,6 +21,7 @@ const COMMAND_GROUP_LABELS: Record<PiRuntimeCommand['source'], string> = {
 }
 
 const COMMAND_GROUP_ORDER: PiRuntimeCommand['source'][] = ['extension', 'skill', 'prompt', 'unknown']
+const PRIORITY_COMMAND_NAMES = new Set(['proma:ask_user_bridge_status'])
 
 function formatTokens(tokens: number): string {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
@@ -109,6 +110,14 @@ function getContextLabel(state: AgentRuntimeStateResult): string | undefined {
   return `${formatTokens(usage.tokens)} / ${formatTokens(usage.maxTokens)}${percent}`
 }
 
+function sortRuntimeCommands(commands: PiRuntimeCommand[]): PiRuntimeCommand[] {
+  return [...commands].sort((left, right) => {
+    const leftPriority = PRIORITY_COMMAND_NAMES.has(left.name) ? 0 : 1
+    const rightPriority = PRIORITY_COMMAND_NAMES.has(right.name) ? 0 : 1
+    return leftPriority - rightPriority
+  })
+}
+
 export function getPiRuntimeStatusRows(state: AgentRuntimeStateResult): PiRuntimeStatusRow[] {
   const rows: PiRuntimeStatusRow[] = []
 
@@ -142,6 +151,6 @@ export function getPiRuntimeCommandGroups(commands: AgentRuntimeStateResult['com
   return COMMAND_GROUP_ORDER.flatMap((source): PiRuntimeCommandGroup[] => {
     const groupCommands = sourceMap.get(source) ?? []
     if (groupCommands.length === 0) return []
-    return [{ source, label: COMMAND_GROUP_LABELS[source], commands: groupCommands }]
+    return [{ source, label: COMMAND_GROUP_LABELS[source], commands: sortRuntimeCommands(groupCommands) }]
   })
 }

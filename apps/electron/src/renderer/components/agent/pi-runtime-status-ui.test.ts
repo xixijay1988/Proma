@@ -108,4 +108,29 @@ describe('Pi runtime status UI helpers', () => {
       },
     ])
   })
+
+  test('Given many extension commands When grouped Then Proma AskUser bridge status is prioritized before the visible cutoff', () => {
+    const commands: NonNullable<AgentRuntimeStateResult['commands']> = [
+      { name: 'extension:one', source: 'extension' },
+      { name: 'extension:two', source: 'extension' },
+      { name: 'extension:three', source: 'extension' },
+      { name: 'extension:four', source: 'extension' },
+      { name: 'extension:five', source: 'extension' },
+      { name: 'extension:six', source: 'extension' },
+      { name: 'extension:seven', source: 'extension' },
+      { name: 'extension:eight', source: 'extension' },
+      { name: 'extension:nine', source: 'extension' },
+      {
+        name: 'proma:ask_user_bridge_status',
+        source: 'extension',
+        description: 'Proma AskUserQuestion bridge status',
+      },
+    ]
+
+    const groups = getPiRuntimeCommandGroups(commands)
+    const extensionGroup = groups.find((group) => group.source === 'extension')
+
+    expect(extensionGroup?.commands.slice(0, 8).map((command) => command.name)).toContain('proma:ask_user_bridge_status')
+    expect(extensionGroup?.commands[0]?.name).toBe('proma:ask_user_bridge_status')
+  })
 })

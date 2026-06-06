@@ -27,6 +27,7 @@ import { AskUserBanner } from './AskUserBanner'
 import { ExitPlanModeBanner } from './ExitPlanModeBanner'
 import { PlanModeDashedBorder } from './PlanModeDashedBorder'
 import { PiRuntimeStatusPopover } from './PiRuntimeStatusPopover'
+import { getPiAgentExperimentalNotice } from './pi-agent-capabilities-ui.ts'
 import { ModelSelector } from '@/components/chat/ModelSelector'
 import { AttachmentPreviewItem } from '@/components/chat/AttachmentPreviewItem'
 import { QuotedSelectionChip } from '@/components/diff/QuotedSelectionChip'
@@ -2441,7 +2442,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
 
         {isPiAgentEngine && (
           <div className="mx-4 mb-2 rounded-lg bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-700 dark:text-amber-300">
-            Pi Agent RPC experimental 当前支持本地 coding 最小闭环、Proma 权限确认、Pi 原生 Skills、Proma MCP bridge 逐工具调用、Pi session tree 分叉/克隆/切换，以及 Pi git checkpoint 显式文件恢复；MCP bridge 不是 Claude SDK 深度注入。
+            {getPiAgentExperimentalNotice()}
           </div>
         )}
 

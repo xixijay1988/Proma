@@ -3057,6 +3057,28 @@ Phase D 当前结论：Pi runtime 的身份识别、DeepSeek provider 映射、�
   - `bun test apps/electron/src/main/lib/adapters/pi-agent-adapter.test.ts`：49 pass / 0 fail。
   - `bun run --filter='@proma/electron' typecheck`：通过。
 
+## 2026-06-06 Phase J94 Pi AskUser capability visibility
+
+- 背景：
+  - J93 已经为 Pi runtime 注入 `AskUserQuestion` bridge，但用户在 Pi 会话页面只能看到旧的 experimental 提示，无法直观看到“向用户提问”能力已接入。
+  - Pi runtime status 的 Extensions 分组只展示前 8 个命令；如果 extension command 较多，`proma:ask_user_bridge_status` 可能被截断隐藏，降低了证明 bridge 已加载的可见性。
+- 实现：
+  - `pi-agent-capabilities-ui.ts`：
+    - 新增 `getPiAgentExperimentalNotice()`，集中维护 Pi experimental 能力边界文案。
+    - Pi 会话提示明确包含 `AskUserQuestion 向用户提问`，并继续说明 `MCP bridge 不是 Claude SDK 深度注入`。
+  - `AgentView.tsx`：
+    - Pi experimental 提示改为调用 helper，避免后续能力边界文案继续散落在大组件中。
+  - `pi-runtime-status-ui.ts`：
+    - Runtime status command 分组展示时优先排序 `proma:ask_user_bridge_status`，避免被弹窗前 8 条命令截断。
+- 版本：
+  - `@proma/electron` patch bump 到 `0.10.130`。
+- 当前边界：
+  - 这次只增强 Pi AskUser 能力的可见性和可证明性，不改变 Pi RPC 协议。
+  - 由于 Pi RPC 模式下 `ctx.ui.custom` 不可用，带 description / preview 的结构化单选和真正多选仍需要后续通过 Proma 自定义 bridge 协议补齐。
+- 已运行：
+  - `bun test apps/electron/src/renderer/components/agent/pi-agent-capabilities-ui.test.ts`：1 pass / 0 fail。
+  - `bun test apps/electron/src/renderer/components/agent/pi-runtime-status-ui.test.ts`：红灯确认 `proma:ask_user_bridge_status` 会被前 8 条截断，实施后 3 pass / 0 fail。
+
 ## 多端接力约定
 
 - 后续每个重要阶段结束后，同步更新本文件或新增同目录 handoff。
