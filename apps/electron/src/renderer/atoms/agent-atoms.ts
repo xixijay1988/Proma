@@ -763,9 +763,11 @@ export function applyAgentEvent(
         ...(event.usage ? {
           ...(event.usage.costUsd != null && { costUsd: event.usage.costUsd }),
           ...(event.usage.contextWindow != null && {
-            contextWindow: prev.contextWindow != null
-              ? Math.max(prev.contextWindow, event.usage.contextWindow)
-              : event.usage.contextWindow,
+            contextWindow: event.usage.contextWindowAuthoritative
+              ? event.usage.contextWindow
+              : prev.contextWindow != null
+                ? Math.max(prev.contextWindow, event.usage.contextWindow)
+                : event.usage.contextWindow,
             usageUpdatedAt: Date.now(),
           }),
           ...(needResultFallback && event.usage.inputTokens != null && { inputTokens: event.usage.inputTokens }),
@@ -806,7 +808,9 @@ export function applyAgentEvent(
         // 模型窗口在同一会话内不会缩小，取更大值可兼顾两类端点——既不会让推断偏小的
         // 端点（如 GLM 剥掉 [1m] 后缀）挡住真实的 1M，也不会让回报偏小的端点覆盖正确的 1M。
         ...(event.usage.contextWindow && {
-          contextWindow: Math.max(prev.contextWindow ?? 0, event.usage.contextWindow),
+          contextWindow: event.usage.contextWindowAuthoritative
+            ? event.usage.contextWindow
+            : Math.max(prev.contextWindow ?? 0, event.usage.contextWindow),
         }),
         usageUpdatedAt: Date.now(),
       }

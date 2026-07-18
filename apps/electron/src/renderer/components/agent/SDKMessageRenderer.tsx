@@ -215,23 +215,25 @@ function extractTurnUsage(turnMessages: SDKMessage[]): { durationMs?: number; us
     const durationMs = typeof raw._durationMs === 'number' ? raw._durationMs : undefined
     const u = resultMsg.usage
     if (!u) return { durationMs }
-    // 多 entry 场景（Task 子 Agent 等）：取最大 contextWindow
-    let contextWindow: number | undefined
-    if (resultMsg.modelUsage) {
-      for (const [modelId, info] of Object.entries(resultMsg.modelUsage)) {
-        const fallbackModelId = resultMsg._channelModelId ?? modelId
-        const fallbackWindow = resultMsg._channelProvider
-          ? inferAgentSdkContextWindow(fallbackModelId, resultMsg._channelProvider)
-          : inferContextWindow(fallbackModelId)
-        const candidate = Math.max(info?.contextWindow ?? 0, fallbackWindow ?? 0) || undefined
-        if (candidate && (contextWindow === undefined || candidate > contextWindow)) {
-          contextWindow = candidate
+    // 用户配置快照优先；缺省时多 entry 场景（Task 子 Agent 等）仍取最大 contextWindow。
+    let contextWindow: number | undefined = resultMsg._channelContextWindow
+    if (contextWindow === undefined) {
+      if (resultMsg.modelUsage) {
+        for (const [modelId, info] of Object.entries(resultMsg.modelUsage)) {
+          const fallbackModelId = resultMsg._channelModelId ?? modelId
+          const fallbackWindow = resultMsg._channelProvider
+            ? inferAgentSdkContextWindow(fallbackModelId, resultMsg._channelProvider)
+            : inferContextWindow(fallbackModelId)
+          const candidate = Math.max(info?.contextWindow ?? 0, fallbackWindow ?? 0) || undefined
+          if (candidate && (contextWindow === undefined || candidate > contextWindow)) {
+            contextWindow = candidate
+          }
         }
+      } else {
+        contextWindow = resultMsg._channelProvider
+          ? inferAgentSdkContextWindow(resultMsg._channelModelId, resultMsg._channelProvider)
+          : inferContextWindow(resultMsg._channelModelId)
       }
-    } else {
-      contextWindow = resultMsg._channelProvider
-        ? inferAgentSdkContextWindow(resultMsg._channelModelId, resultMsg._channelProvider)
-        : inferContextWindow(resultMsg._channelModelId)
     }
     return {
       durationMs,
@@ -242,6 +244,7 @@ function extractTurnUsage(turnMessages: SDKMessage[]): { durationMs?: number; us
         cacheCreationTokens: u.cache_creation_input_tokens,
         costUsd: resultMsg.total_cost_usd,
         contextWindow,
+        ...(resultMsg._channelContextWindow !== undefined && { contextWindowAuthoritative: true }),
       },
     }
   }

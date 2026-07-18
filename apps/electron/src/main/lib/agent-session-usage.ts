@@ -7,9 +7,10 @@
  *
  * 数据来源：~/.proma/agent-sessions/{id}.jsonl 里最后一条带 usage 的消息。
  * 优先级：
- * 1. SDK result 消息（subtype=success/error_*）：usage + modelUsage[?].contextWindow
- * 2. SDK assistant 消息：message.usage + 按 message.model 推断 contextWindow
- * 3. 都拿不到：返回 undefined（占用率未知），调度器按"保守复用"处理
+ * 1. 当轮持久化的用户 contextWindow 配置快照
+ * 2. SDK result 消息（subtype=success/error_*）：usage + modelUsage[?].contextWindow
+ * 3. SDK assistant 消息：message.usage + 按 message.model 推断 contextWindow
+ * 4. 都拿不到：返回 undefined（占用率未知），调度器按"保守复用"处理
  *
  * 已用 token 口径与渲染层（useGlobalAgentListeners / SDKMessageRenderer）保持一致：
  * input_tokens + cache_read_input_tokens + cache_creation_input_tokens。
@@ -81,15 +82,20 @@ export function getSessionContextUsageRatio(sessionId: string): number | undefin
       const usage = asst.message?.usage
       if (!usage) continue
       const usedTokens = sumUsedTokens(usage)
-      const modelId = asst._channelModelId ?? asst.message?.model
-      const contextWindow = asst._channelProvider
-        ? inferAgentSdkContextWindow(modelId, asst._channelProvider)
-        : inferContextWindow(modelId)
-      return calculateContextUsageRatio(usedTokens, contextWindow)
+      return calculateContextUsageRatio(usedTokens, resolveAssistantContextWindow(asst))
     }
   }
 
   return undefined
+}
+
+/** 解析 assistant 消息当轮使用的上下文窗口，用户配置快照优先。 */
+export function resolveAssistantContextWindow(message: SDKAssistantMessage): number | undefined {
+  if (message._channelContextWindow !== undefined) return message._channelContextWindow
+  const modelId = message._channelModelId ?? message.message?.model
+  return message._channelProvider
+    ? inferAgentSdkContextWindow(modelId, message._channelProvider)
+    : inferContextWindow(modelId)
 }
 
 /**
@@ -103,7 +109,8 @@ export function getSessionContextUsageRatio(sessionId: string): number | undefin
  *
  * 每个 entry 优先用 SDK 实测的 contextWindow，缺失时按本次 Agent provider 的运行窗口推断。
  */
-function pickResultContextWindow(result: SDKResultMessage): number | undefined {
+export function pickResultContextWindow(result: SDKResultMessage): number | undefined {
+  if (result._channelContextWindow !== undefined) return result._channelContextWindow
   if (!result.modelUsage) return undefined
   let best: number | undefined
   for (const [modelId, info] of Object.entries(result.modelUsage)) {

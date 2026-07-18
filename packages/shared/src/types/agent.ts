@@ -203,6 +203,8 @@ export interface SDKAssistantMessage {
   _channelModelId?: string
   /** 渠道 provider，用于按 Agent SDK 实际运行窗口计算压缩阈值 */
   _channelProvider?: ProviderType
+  /** 当轮用户配置的上下文窗口快照；存在时优先于 Runtime 回报与模型推断 */
+  _channelContextWindow?: number
 }
 
 /** SDK user 消息 */
@@ -242,6 +244,8 @@ export interface SDKResultMessage {
   _channelModelId?: string
   /** 渠道 provider，用于按 Agent SDK 实际运行窗口计算压缩阈值 */
   _channelProvider?: ProviderType
+  /** 当轮用户配置的上下文窗口快照；存在时优先于 Runtime 回报与模型推断 */
+  _channelContextWindow?: number
 }
 
 /** SDK system 消息（init / compact_boundary / permission_denied / task_started / task_progress / task_notification） */
@@ -428,6 +432,8 @@ export interface AgentEventUsage {
   cacheCreationTokens?: number
   costUsd?: number
   contextWindow?: number
+  /** true 时 contextWindow 是用户配置快照，应替换而不是与推断值取 max。 */
+  contextWindowAuthoritative?: boolean
 }
 
 /** SDK 子任务 / SubAgent 用量统计 */
@@ -559,7 +565,7 @@ export type PromaEvent =
   | { type: 'plan_mode_changed'; sessionId: string; active: boolean; source: AgentPlanModeChangeSource }
   | { type: 'retry'; status: 'starting' | 'attempt' | 'cleared' | 'failed'; attempt?: number; maxAttempts?: number; delaySeconds?: number; reason?: string; attemptData?: RetryAttempt; error?: TypedError }
   | { type: 'model_resolved'; model: string }
-  | { type: 'context_window'; contextWindow: number }
+  | { type: 'context_window'; contextWindow: number; authoritative?: boolean }
   | { type: 'permission_mode_changed'; mode: PromaPermissionMode }
   | { type: 'title_updated'; title: string }
   | { type: 'external_run_started'; source: AgentExternalRunSource; sessionId: string; title?: string; workspaceId?: string; modelId?: string; startedAt: number }

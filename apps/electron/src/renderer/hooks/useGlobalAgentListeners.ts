@@ -129,8 +129,14 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
       case 'model_resolved':
         return [{ type: 'model_resolved', model: evt.model }]
       case 'context_window':
-        // main 进程从 SDK result 拿到的真实 contextWindow，转成 usage_update 让 atom 合并到 streamState
-        return [{ type: 'usage_update', usage: { contextWindow: evt.contextWindow } }]
+        // 用户配置快照允许主动缩小窗口；authoritative 时 atom 必须直接替换而非取 max。
+        return [{
+          type: 'usage_update',
+          usage: {
+            contextWindow: evt.contextWindow,
+            ...(evt.authoritative && { contextWindowAuthoritative: true }),
+          },
+        }]
       case 'permission_mode_changed':
         return [{ type: 'permission_mode_changed', mode: evt.mode }]
       case 'run_resumed':
@@ -204,9 +210,9 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
         // 导致 glm-x-preview[1m] 被识别成 glm-x-preview（200K）。
         const modelName = aMsg._channelModelId ?? aMsg.message.model
         const provider = aMsg._channelProvider
-        const fallbackWindow = provider
+        const fallbackWindow = aMsg._channelContextWindow ?? (provider
           ? inferAgentSdkContextWindow(modelName, provider)
-          : inferContextWindow(modelName)
+          : inferContextWindow(modelName))
         events.push({
           type: 'usage_update',
           usage: {
@@ -215,6 +221,7 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
             cacheReadTokens: u.cache_read_input_tokens,
             cacheCreationTokens: u.cache_creation_input_tokens,
             ...(fallbackWindow ? { contextWindow: fallbackWindow } : {}),
+            ...(aMsg._channelContextWindow !== undefined && { contextWindowAuthoritative: true }),
           },
         })
       }
@@ -250,25 +257,28 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
         usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }
         _channelModelId?: string
         _channelProvider?: ProviderType
+        _channelContextWindow?: number
       }
       // 多 entry 场景（Task 子 Agent 等）：取最大 contextWindow，
       // 避免子 Agent 的小窗口覆盖主模型的大窗口、导致指示器飘忽。
-      let contextWindow: number | undefined
+      let contextWindow: number | undefined = rMsg._channelContextWindow
       const fallbackWindow = rMsg._channelProvider
         ? inferAgentSdkContextWindow(rMsg._channelModelId, rMsg._channelProvider)
         : inferContextWindow(rMsg._channelModelId)
-      if (rMsg.modelUsage) {
-        for (const [modelId, info] of Object.entries(rMsg.modelUsage)) {
-          const modelFallbackWindow = rMsg._channelProvider
-            ? inferAgentSdkContextWindow(rMsg._channelModelId ?? modelId, rMsg._channelProvider)
-            : inferContextWindow(rMsg._channelModelId ?? modelId)
-          const candidate = Math.max(info?.contextWindow ?? 0, modelFallbackWindow ?? 0) || undefined
-          if (candidate && (contextWindow === undefined || candidate > contextWindow)) {
-            contextWindow = candidate
+      if (contextWindow === undefined) {
+        if (rMsg.modelUsage) {
+          for (const [modelId, info] of Object.entries(rMsg.modelUsage)) {
+            const modelFallbackWindow = rMsg._channelProvider
+              ? inferAgentSdkContextWindow(rMsg._channelModelId ?? modelId, rMsg._channelProvider)
+              : inferContextWindow(rMsg._channelModelId ?? modelId)
+            const candidate = Math.max(info?.contextWindow ?? 0, modelFallbackWindow ?? 0) || undefined
+            if (candidate && (contextWindow === undefined || candidate > contextWindow)) {
+              contextWindow = candidate
+            }
           }
+        } else {
+          contextWindow = fallbackWindow
         }
-      } else {
-        contextWindow = fallbackWindow
       }
       // result.usage 是整个 query 内所有模型调用的累计求和，不能当成当前上下文占用，
       // 否则进度环会虚高、冲破 100%（PR #821 修的正是这个问题）。
@@ -286,6 +296,7 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
         usage: (rMsg.total_cost_usd != null || contextWindow != null || u != null) ? {
           costUsd: rMsg.total_cost_usd,
           contextWindow,
+          ...(rMsg._channelContextWindow !== undefined && { contextWindowAuthoritative: true }),
           ...(inputTokens != null && { inputTokens }),
           ...(u && { outputTokens: u.output_tokens }),
           ...(u && { cacheReadTokens: u.cache_read_input_tokens }),

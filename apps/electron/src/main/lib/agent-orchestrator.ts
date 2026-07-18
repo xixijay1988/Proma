@@ -805,6 +805,7 @@ export class AgentOrchestrator {
     sessionId: string,
     resultSubtype: string | undefined,
     resultErrors: string[] | undefined,
+    contextWindow?: number,
   ): string {
     const detail = resultErrors?.find((error) => error.trim().length > 0)?.trim()
     const subtype = resultSubtype ?? 'unknown'
@@ -819,6 +820,7 @@ export class AgentOrchestrator {
         content: [{ type: 'text', text: errorContent }],
       },
       parent_tool_use_id: null,
+      ...(contextWindow !== undefined && { _channelContextWindow: contextWindow }),
       error: { message: errorContent, errorType: EMPTY_RESPONSE_RESULT_SUBTYPE },
       _createdAt: Date.now(),
       _errorCode: 'unknown_error',
@@ -1562,7 +1564,11 @@ export class AgentOrchestrator {
         // 覆盖流式过程中按模型名推断的 fallback 值（智谱等端点会把 [1m] 等后缀剥掉，导致 fallback 不准）
         this.eventBus.emit(sessionId, {
           kind: 'proma_event',
-          event: { type: 'context_window', contextWindow },
+          event: {
+            type: 'context_window',
+            contextWindow,
+            ...(configuredContextWindow !== undefined && { authoritative: true }),
+          },
         })
       }
       const piCustomTools = [...piBuiltinTools, ...piMcpTools]
@@ -1928,6 +1934,7 @@ export class AgentOrchestrator {
                   parent_tool_use_id: null,
                   _channelModelId: modelId,
                   _channelProvider: channel.provider,
+                  ...(configuredContextWindow !== undefined && { _channelContextWindow: configuredContextWindow }),
                   error: { message: typedError.message, errorType: typedError.code },
                   _createdAt: Date.now(),
                   _errorCode: typedError.code,
@@ -1976,6 +1983,9 @@ export class AgentOrchestrator {
                       (msg as Record<string, unknown>)._channelModelId = modelId
                     }
                     ;(msg as Record<string, unknown>)._channelProvider = channel.provider
+                    if (configuredContextWindow !== undefined) {
+                      ;(msg as Record<string, unknown>)._channelContextWindow = configuredContextWindow
+                    }
                   }
                   // 为 assistant 消息注入渠道信息，确保持久化后能正确匹配模型显示名与 Agent SDK 窗口
                   if (msg.type === 'assistant') {
@@ -1983,6 +1993,9 @@ export class AgentOrchestrator {
                       (msg as Record<string, unknown>)._channelModelId = modelId
                     }
                     ;(msg as Record<string, unknown>)._channelProvider = channel.provider
+                    if (configuredContextWindow !== undefined) {
+                      ;(msg as Record<string, unknown>)._channelContextWindow = configuredContextWindow
+                    }
                   }
                   accumulatedMessages.push(msg)
                 }
@@ -2108,7 +2121,12 @@ export class AgentOrchestrator {
           try { updateAgentSessionMeta(sessionId, wasStoppedByUser ? { stoppedByUser: true } : {}) } catch { /* 忽略 */ }
 
           if (!wasStoppedByUser && visibleRunMessageCount === 0) {
-            const errorContent = this.persistEmptyResponseError(sessionId, capturedResultSubtype, capturedResultErrors)
+            const errorContent = this.persistEmptyResponseError(
+              sessionId,
+              capturedResultSubtype,
+              capturedResultErrors,
+              configuredContextWindow,
+            )
             failRun(errorContent, getAgentSessionMessages(sessionId), {
               startedAt: streamStartedAt,
               resultSubtype: EMPTY_RESPONSE_RESULT_SUBTYPE,
