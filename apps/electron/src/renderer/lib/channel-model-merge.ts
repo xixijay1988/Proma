@@ -1,15 +1,15 @@
 import type { ChannelModel } from '@proma/shared'
 
 interface MergeFetchedChannelModelsOptions {
-  /** ChatGPT Codex 等精选目录拉取后默认全部启用。 */
+  /** Enable every fetched model for curated catalogs such as ChatGPT Codex. */
   enableAllFetched?: boolean
 }
 
 /**
- * 将供应商最新模型清单与用户已有配置合并。
+ * Merge the provider's latest model catalog with existing user configuration.
  *
- * 供应商字段以 fetched 为准；用户的启用状态和上下文窗口保留；不在供应商
- * 清单中的 manual 模型继续存在，普通 fetched 残留则被清理。
+ * Provider fields come from fetched models, while user enabled states and context-window
+ * overrides are preserved. Manual models remain; stale fetched models are removed.
  */
 export function mergeFetchedChannelModels(
   previous: ChannelModel[],

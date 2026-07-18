@@ -201,6 +201,8 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
   const [zhipuTeamSecret, setZhipuTeamSecret] = React.useState<ZhipuTeamSecretForm>(EMPTY_ZHIPU_TEAM_SECRET)
   const [showApiKey, setShowApiKey] = React.useState(false)
   const [models, setModels] = React.useState<ChannelModel[]>(channel?.models ?? [])
+  const modelsRef = React.useRef(models)
+  modelsRef.current = models
   const [enabled, setEnabled] = React.useState(channel?.enabled ?? true)
   const [invalidContextWindowModelIds, setInvalidContextWindowModelIds] = React.useState<Set<string>>(() => new Set())
 
@@ -487,13 +489,13 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
       // codex 模型是 Pi SDK 内置目录、不依赖凭据/baseUrl。登录后自动拉取并全部启用。
       // 不复用 handleFetchModels：其 gate 读派生自 apiKey state 的 hasRequiredSecret，
       // 而 setApiKey 是异步的，同一 tick 内仍是旧值，这里直接内联拉取。
-      let codexModels: ChannelModel[] = []
+      let codexModels = modelsRef.current
       try {
         const modelsResult = await window.electronAPI.fetchModels({ provider, baseUrl, apiKey: credentials })
         setFetchResult(modelsResult)
         if (modelsResult.success && modelsResult.models.length > 0) {
-          codexModels = modelsResult.models.map((m) => ({ ...m, enabled: true }))
-          setModels((prev) => mergeFetchedChannelModels(prev, modelsResult.models, { enableAllFetched: true }))
+          codexModels = mergeFetchedChannelModels(modelsRef.current, modelsResult.models, { enableAllFetched: true })
+          setModels(codexModels)
         }
       } catch (modelErr) {
         console.error('[模型配置表单] 拉取 ChatGPT 模型失败:', modelErr)
@@ -553,8 +555,8 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
       // 拉取失败时保留现有列表，避免 auto-save 持久化空模型列表
       if (!result.success) return
       setModels((prev) => mergeFetchedChannelModels(prev, result.models, {
-        // ChatGPT (Codex) 是 SDK 内置的少量精选模型，拉取即全部启用，
-        // 避免新模型（如 gpt-5.6 系列）默认沉到「可用模型」区域。
+        // ChatGPT Codex exposes a small curated catalog, so enable all fetched models by default
+        // instead of hiding newly introduced models in the available-model section.
         enableAllFetched: isCodexProvider,
       }))
     } catch (error) {

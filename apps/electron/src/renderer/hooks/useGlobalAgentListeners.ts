@@ -129,7 +129,7 @@ function payloadToLegacyEvents(payload: AgentStreamPayload): AgentEvent[] {
       case 'model_resolved':
         return [{ type: 'model_resolved', model: evt.model }]
       case 'context_window':
-        // 用户配置快照允许主动缩小窗口；authoritative 时 atom 必须直接替换而非取 max。
+        // An authoritative user snapshot may shrink the window, so the atom must replace instead of maximizing.
         return [{
           type: 'usage_update',
           usage: {

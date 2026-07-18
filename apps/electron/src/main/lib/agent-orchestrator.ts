@@ -1514,7 +1514,7 @@ export class AgentOrchestrator {
         ? appSettings.agentMaxTurns
         : undefined
       const selectedModelId = modelId || DEFAULT_MODEL_ID
-      // 每轮请求固定一次用户配置快照；运行中修改从下一轮开始生效。
+      // Snapshot the user override once per run; changes apply to the next run.
       const configuredContextWindow = channel.models.find((model) => model.id === selectedModelId)?.contextWindow
       const allAdditionalDirectories = collectAttachedDirectories({
         extraDirs: additionalDirectories,
@@ -1557,7 +1557,7 @@ export class AgentOrchestrator {
       }
       const handleContextWindow = (cw: number): void => {
         const inferredWindow = inferAgentSdkContextWindow(selectedModelId, channel.provider)
-        // 用户覆盖可以主动缩小窗口，因此配置存在时不能再与推断值取 max。
+        // A user override may intentionally shrink the window, so do not maximize it with inference.
         const contextWindow = configuredContextWindow ?? (Math.max(cw, inferredWindow ?? 0) || cw)
         console.log(`[Agent 编排] 缓存 contextWindow: ${contextWindow}`)
         // result 消息里的真实 contextWindow 透传到 renderer，

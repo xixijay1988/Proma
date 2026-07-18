@@ -12,7 +12,7 @@ interface ModelContextWindowFieldProps {
   onValidityChange: (modelId: string, valid: boolean) => void
 }
 
-/** 模型行内的上下文窗口草稿输入；非法草稿不会写回渠道配置。 */
+/** Inline context-window draft input; invalid drafts are never written to channel configuration. */
 export function ModelContextWindowField({
   modelId,
   value,
@@ -26,6 +26,10 @@ export function ModelContextWindowField({
   React.useEffect(() => {
     if (!focusedRef.current) setDraft(formatContextWindowInput(value))
   }, [value])
+
+  React.useEffect(() => {
+    onValidityChange(modelId, true)
+  }, [modelId, onValidityChange])
 
   const validate = React.useCallback((nextDraft: string): boolean => {
     const parsed = parseContextWindowInput(nextDraft)

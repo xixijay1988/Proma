@@ -8,10 +8,10 @@ export type ContextWindowInputResult =
 const CONTEXT_WINDOW_PATTERN = /^(\d+(?:\.\d+)?)\s*([km])?$/i
 
 /**
- * 解析用户输入的模型上下文窗口。
+ * Parse a user-entered model context window.
  *
- * 支持纯数字、千分位数字，以及大小写不敏感的 K / M 单位。
- * 返回值统一为整数 token；空输入表示删除自定义值并恢复自动策略。
+ * Supports plain and comma-separated numbers plus case-insensitive K/M suffixes.
+ * Returns integer tokens; an empty input removes the override and restores automatic resolution.
  */
 export function parseContextWindowInput(input: string): ContextWindowInputResult {
   const normalized = input.trim().replace(/,/g, '')
@@ -40,7 +40,7 @@ export function parseContextWindowInput(input: string): ContextWindowInputResult
   return { ok: true, value }
 }
 
-/** 将整数 token 格式化为适合模型配置输入框展示的简写。 */
+/** Format integer tokens for display in the model configuration input. */
 export function formatContextWindowInput(value: number | undefined): string {
   if (value === undefined) return ''
 

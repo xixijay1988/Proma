@@ -7,10 +7,10 @@
  *
  * 数据来源：~/.proma/agent-sessions/{id}.jsonl 里最后一条带 usage 的消息。
  * 优先级：
- * 1. 当轮持久化的用户 contextWindow 配置快照
- * 2. SDK result 消息（subtype=success/error_*）：usage + modelUsage[?].contextWindow
- * 3. SDK assistant 消息：message.usage + 按 message.model 推断 contextWindow
- * 4. 都拿不到：返回 undefined（占用率未知），调度器按"保守复用"处理
+ * 1. The persisted user contextWindow override snapshot for the run
+ * 2. SDK result messages (subtype=success/error_*): usage + modelUsage[?].contextWindow
+ * 3. SDK assistant messages: message.usage + contextWindow inferred from message.model
+ * 4. If unavailable, return undefined so the scheduler conservatively reuses the session
  *
  * 已用 token 口径与渲染层（useGlobalAgentListeners / SDKMessageRenderer）保持一致：
  * input_tokens + cache_read_input_tokens + cache_creation_input_tokens。
@@ -89,7 +89,7 @@ export function getSessionContextUsageRatio(sessionId: string): number | undefin
   return undefined
 }
 
-/** 解析 assistant 消息当轮使用的上下文窗口，用户配置快照优先。 */
+/** Resolve the assistant message context window, preferring the per-run user override snapshot. */
 export function resolveAssistantContextWindow(message: SDKAssistantMessage): number | undefined {
   if (message._channelContextWindow !== undefined) return message._channelContextWindow
   const modelId = message._channelModelId ?? message.message?.model

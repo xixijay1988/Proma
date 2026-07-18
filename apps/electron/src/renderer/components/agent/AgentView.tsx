@@ -1780,7 +1780,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         : session
     )))
 
-    // 模型切换时立即应用新模型的用户配置；未配置则清除旧值，等待 Runtime / 推断更新。
+    // Apply the new model override immediately; otherwise clear the old value and wait for runtime inference.
     const nextConfiguredContextWindow = globalChannels
       .find((channel) => channel.id === option.channelId)
       ?.models.find((model) => model.id === option.modelId)

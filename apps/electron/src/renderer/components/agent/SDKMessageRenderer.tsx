@@ -215,7 +215,7 @@ function extractTurnUsage(turnMessages: SDKMessage[]): { durationMs?: number; us
     const durationMs = typeof raw._durationMs === 'number' ? raw._durationMs : undefined
     const u = resultMsg.usage
     if (!u) return { durationMs }
-    // 用户配置快照优先；缺省时多 entry 场景（Task 子 Agent 等）仍取最大 contextWindow。
+    // Prefer the user override snapshot; otherwise keep the largest window for multi-entry runs.
     let contextWindow: number | undefined = resultMsg._channelContextWindow
     if (contextWindow === undefined) {
       if (resultMsg.modelUsage) {

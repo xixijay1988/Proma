@@ -203,7 +203,7 @@ export interface SDKAssistantMessage {
   _channelModelId?: string
   /** 渠道 provider，用于按 Agent SDK 实际运行窗口计算压缩阈值 */
   _channelProvider?: ProviderType
-  /** 当轮用户配置的上下文窗口快照；存在时优先于 Runtime 回报与模型推断 */
+  /** Per-run user context-window snapshot; takes priority over runtime reports and inference. */
   _channelContextWindow?: number
 }
 
@@ -244,7 +244,7 @@ export interface SDKResultMessage {
   _channelModelId?: string
   /** 渠道 provider，用于按 Agent SDK 实际运行窗口计算压缩阈值 */
   _channelProvider?: ProviderType
-  /** 当轮用户配置的上下文窗口快照；存在时优先于 Runtime 回报与模型推断 */
+  /** Per-run user context-window snapshot; takes priority over runtime reports and inference. */
   _channelContextWindow?: number
 }
 
@@ -432,7 +432,7 @@ export interface AgentEventUsage {
   cacheCreationTokens?: number
   costUsd?: number
   contextWindow?: number
-  /** true 时 contextWindow 是用户配置快照，应替换而不是与推断值取 max。 */
+  /** When true, contextWindow is a user snapshot and must replace rather than maximize. */
   contextWindowAuthoritative?: boolean
 }
 
