@@ -180,13 +180,20 @@ async function findPiCatalogModel(provider: ProviderType, modelId: string): Prom
   return undefined
 }
 
+export function resolvePiContextWindow(
+  configuredContextWindow: number | undefined,
+  catalogContextWindow: number | undefined,
+): number {
+  return configuredContextWindow ?? catalogContextWindow ?? DEFAULT_CONTEXT_WINDOW
+}
+
 async function resolvePiModelDefaults(input: PiAgentQueryOptions): Promise<PiModelDefaults> {
   const catalogModel = input.model ? await findPiCatalogModel(input.provider, input.model) : undefined
   return {
     reasoning: catalogModel?.reasoning ?? true,
     input: catalogModel ? [...catalogModel.input] : ['text', 'image'],
     cost: catalogModel ? { ...catalogModel.cost } : { ...ZERO_MODEL_COST },
-    contextWindow: catalogModel?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    contextWindow: resolvePiContextWindow(input.contextWindowOverride, catalogModel?.contextWindow),
     maxTokens: catalogModel?.maxTokens ?? DEFAULT_MAX_TOKENS,
   }
 }
@@ -314,7 +321,13 @@ async function buildCodexModel(sdk: PiSdk, input: PiAgentQueryOptions) {
   if (!model) {
     throw new Error('未找到可用的 ChatGPT (Codex) 模型，请确认已登录并升级 Pi 运行时')
   }
-  return { authStorage, registry, model }
+  return {
+    authStorage,
+    registry,
+    model: input.contextWindowOverride !== undefined
+      ? { ...model, contextWindow: input.contextWindowOverride }
+      : model,
+  }
 }
 
 /** 列出 Pi SDK 内置的 ChatGPT (Codex) 模型 ID，供渲染层"模型拉取"使用。 */

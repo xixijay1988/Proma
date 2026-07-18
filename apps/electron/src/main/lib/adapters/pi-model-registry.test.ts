@@ -6,6 +6,7 @@ import {
   listCodexModels,
   requiresPromaUserAgent,
   resolvePiApiKey,
+  resolvePiContextWindow,
   stripAgentSdkContextSuffix,
 } from './pi-model-registry'
 
@@ -69,6 +70,24 @@ describe('Pi runtime 模型 ID [1m] 剥离', () => {
 
   test('Given undefined When strip Then 返回 undefined', () => {
     expect(stripAgentSdkContextSuffix(undefined)).toBeUndefined()
+  })
+})
+
+describe('Pi runtime 上下文窗口覆盖', () => {
+  test('Given 用户配置 1.05M When catalog 缺失 Then 用户配置优先于 200K fallback', () => {
+    expect(resolvePiContextWindow(1_050_000, undefined)).toBe(1_050_000)
+  })
+
+  test('Given 用户配置 256K When catalog 为 1M Then 允许用户主动降低窗口', () => {
+    expect(resolvePiContextWindow(256_000, 1_000_000)).toBe(256_000)
+  })
+
+  test('Given 未配置 When catalog 有值 Then 使用 catalog', () => {
+    expect(resolvePiContextWindow(undefined, 1_050_000)).toBe(1_050_000)
+  })
+
+  test('Given 未配置且 catalog 缺失 When 解析 Then 保持 200K fallback', () => {
+    expect(resolvePiContextWindow(undefined, undefined)).toBe(200_000)
   })
 })
 

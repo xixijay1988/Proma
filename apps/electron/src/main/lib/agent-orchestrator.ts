@@ -1512,6 +1512,8 @@ export class AgentOrchestrator {
         ? appSettings.agentMaxTurns
         : undefined
       const selectedModelId = modelId || DEFAULT_MODEL_ID
+      // 每轮请求固定一次用户配置快照；运行中修改从下一轮开始生效。
+      const configuredContextWindow = channel.models.find((model) => model.id === selectedModelId)?.contextWindow
       const allAdditionalDirectories = collectAttachedDirectories({
         extraDirs: additionalDirectories,
         sessionMeta,
@@ -1552,8 +1554,9 @@ export class AgentOrchestrator {
         this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'model_resolved', model: resolvedModel } })
       }
       const handleContextWindow = (cw: number): void => {
-        const inferredWindow = inferAgentSdkContextWindow(modelId, channel.provider)
-        const contextWindow = Math.max(cw, inferredWindow ?? 0) || cw
+        const inferredWindow = inferAgentSdkContextWindow(selectedModelId, channel.provider)
+        // 用户覆盖可以主动缩小窗口，因此配置存在时不能再与推断值取 max。
+        const contextWindow = configuredContextWindow ?? (Math.max(cw, inferredWindow ?? 0) || cw)
         console.log(`[Agent 编排] 缓存 contextWindow: ${contextWindow}`)
         // result 消息里的真实 contextWindow 透传到 renderer，
         // 覆盖流式过程中按模型名推断的 fallback 值（智谱等端点会把 [1m] 等后缀剥掉，导致 fallback 不准）
@@ -1590,6 +1593,7 @@ export class AgentOrchestrator {
         ...(mentionedSkills?.length ? { skillMentions: mentionedSkills } : {}),
         ...(isCompactCommand ? { compactRequest: true } : {}),
         ...(sessionMeta?.codexFastMode && channel.provider === 'openai-codex' ? { codexFastMode: true } : {}),
+        ...(configuredContextWindow !== undefined && { contextWindowOverride: configuredContextWindow }),
         thinkingLevel: resolvePiThinkingLevel(appSettings),
         ...(appSettings.agentMaxBudgetUsd != null && appSettings.agentMaxBudgetUsd > 0 && {
           maxBudgetUsd: appSettings.agentMaxBudgetUsd,

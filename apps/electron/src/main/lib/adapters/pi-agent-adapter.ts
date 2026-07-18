@@ -91,6 +91,8 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   onSessionId?: (sdkSessionId: string) => void
   onModelResolved?: (model: string) => void
   onContextWindow?: (contextWindow: number) => void
+  /** 用户为当前渠道模型配置的上下文窗口快照。 */
+  contextWindowOverride?: number
   thinkingLevel?: AgentThinkingLevel
   maxBudgetUsd?: number
   outputFormat?: JsonSchemaOutputFormat
