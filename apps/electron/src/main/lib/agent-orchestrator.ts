@@ -27,6 +27,7 @@ import {
   THINKING_SIGNATURE_ERROR_CODE,
   THINKING_SIGNATURE_ERROR_MESSAGE,
   THINKING_SIGNATURE_ERROR_TITLE,
+  getSDKCompactStatus,
   isPersistableSDKSystemMessage,
   normalizeMcpTransportType,
   inferAgentSdkContextWindow,
@@ -63,6 +64,11 @@ import { buildPiBuiltinTools } from './adapters/pi-builtin-tools'
 import { buildPiMcpTools } from './adapters/pi-mcp-tools'
 import type { AgentRuntimeEnv } from './agent-runtime-env'
 import { isVisibleRunMessage } from './agent-run-message-visibility'
+import {
+  createAgentResultDrainState,
+  reduceAgentResultDrainState,
+  type AgentResultDrainEvent,
+} from './agent-result-drain'
 import { applyAgentSdkAuthEnv } from './agent-sdk-auth-env'
 import { getAgentSdkMaxOutputTokens } from './agent-sdk-output-limits'
 import { createFallbackTitle, sanitizeGeneratedTitle, TITLE_PROMPT } from './title-generation'
@@ -1747,8 +1753,32 @@ export class AgentOrchestrator {
           // 此 timeout 仅作真正的兜底安全网，防止极端情况（SDK 行为再次变化等）下 iterator 不关闭、
           // 事件循环无限挂起。正常运行下不应触发——若日志频繁出现 drain timeout，说明 adapter 主动
           // 终止路径失效，需排查。
-          let drainTimeoutPromise: Promise<'drain_timeout'> | null = null
+          const drainTimeout = {
+            promise: null as Promise<'drain_timeout'> | null,
+          }
           const RESULT_DRAIN_TIMEOUT_MS = 2_000
+          let resultDrainState = createAgentResultDrainState()
+
+          const startDrainTimeout = (): void => {
+            if (drainTimeout.promise) return
+            drainTimeout.promise = new Promise((resolve) =>
+              setTimeout(() => resolve('drain_timeout'), RESULT_DRAIN_TIMEOUT_MS),
+            )
+          }
+
+          const applyResultDrainEvent = (event: AgentResultDrainEvent): void => {
+            const transition = reduceAgentResultDrainState(resultDrainState, event)
+            resultDrainState = transition.state
+
+            if (transition.timeoutAction === 'cancel') {
+              // Promise 本身不可取消，但从下一轮 race 中移除即可；旧 Promise 结算后会被 GC。
+              drainTimeout.promise = null
+              console.log(`[Agent 编排] 上下文压缩开始，已暂停 result drain timeout`)
+            } else if (transition.timeoutAction === 'start') {
+              startDrainTimeout()
+            }
+          }
+
           // 后台任务等待态：result 走轻量完成后置 true，下一轮真正开始（收到 assistant/user/task 消息）时
           // 置回 false 并发 run_resumed，让 UI 从空闲态恢复运行态。
           let awaitingBackgroundWake = false
@@ -1762,8 +1792,8 @@ export class AgentOrchestrator {
             const racePromises: Array<Promise<{ kind: string; result: IteratorResult<SDKMessage> | null }>> = [
               pendingNext.then((r) => ({ kind: 'event' as const, result: r })),
             ]
-            if (drainTimeoutPromise) {
-              racePromises.push(drainTimeoutPromise.then(() => ({ kind: 'drain_timeout' as const, result: null })))
+            if (drainTimeout.promise) {
+              racePromises.push(drainTimeout.promise.then(() => ({ kind: 'drain_timeout' as const, result: null })))
             }
 
             const raceResult = await Promise.race(racePromises)
@@ -1783,6 +1813,17 @@ export class AgentOrchestrator {
             pendingNext = null
             const msg = iterResult.value
             const isPartialMessage = isPartialSDKMessage(msg)
+
+            if (msg.type === 'system') {
+              const compactStatus = getSDKCompactStatus(msg as SDKSystemMessage)
+              if (compactStatus === 'compacting') {
+                applyResultDrainEvent('compaction_started')
+              } else if (compactStatus === 'success' || compactStatus === 'failed' || compactStatus === 'noop') {
+                const willContinue = (msg as SDKSystemMessage).compact_will_retry === true
+                applyResultDrainEvent(willContinue ? 'compaction_continues' : 'compaction_finished')
+              }
+            }
+
             // isVisibleRunMessage 已抽到独立模块，不含 partial 判断；
             // pi runtime 的流式 partial 消息不应计入可见消息数，故在此显式排除。
             if (!isPartialMessage && isVisibleRunMessage(msg)) {
@@ -2055,13 +2096,10 @@ export class AgentOrchestrator {
                 // while 循环继续 park 在 queryIterator.next()，等待后台任务完成时 SDK 自动 yield 的新一轮消息。
                 awaitingBackgroundWake = true
                 idleComplete(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt, resultSubtype: capturedResultSubtype, resultErrors: capturedResultErrors })
-              } else if (!keepChannelOpen && !drainTimeoutPromise) {
-                // 启动 drain 超时安全网：正常情况下 adapter 收到 terminal result 会主动 break
-                // 触发 iterator.return → 下一次 next() 立即返回 done，此 timeout 不会触发。
-                // 仅在极端情况下（adapter 主动终止失效、SDK 行为再次变化）保护事件循环不无限挂起。
-                drainTimeoutPromise = new Promise((resolve) =>
-                  setTimeout(() => resolve('drain_timeout'), RESULT_DRAIN_TIMEOUT_MS),
-                )
+              } else if (!keepChannelOpen) {
+                // Pi 会在 agent_end/result 之后执行 post-run 自动压缩。若压缩已经开始，
+                // reducer 会延后 drain timeout；若随后收到 compaction_start，则会取消刚启动的 timeout。
+                applyResultDrainEvent('terminal_result')
               }
             }
 

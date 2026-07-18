@@ -106,6 +106,24 @@ describe('SDK 压缩状态分组', () => {
     })
   })
 
+  test('Given 压缩无需执行 When 分组 Then 显示友好的 no-op 状态', () => {
+    const raw = jsonl([
+      { type: 'system', subtype: 'compacting' },
+      { type: 'system', subtype: 'compact_noop', message: '当前上下文较小，暂时无需压缩。' },
+      { type: 'result', subtype: 'success' },
+    ])
+
+    const groups = groupIntoTurns(readSessionMessagesFromString(raw))
+
+    expect(groups).toHaveLength(1)
+    expect(getGroupPreview(groups[0]!)).toBe('无需压缩上下文')
+    expect(groups[0]).toMatchObject({
+      type: 'system',
+      identityMessage: { subtype: 'compacting' },
+      message: { subtype: 'compact_noop' },
+    })
+  })
+
   test('Given 上一次压缩已结束且下一次立即开始 When 分组 Then 保留两个压缩周期', () => {
     const raw = jsonl([
       { type: 'system', subtype: 'compacting' },

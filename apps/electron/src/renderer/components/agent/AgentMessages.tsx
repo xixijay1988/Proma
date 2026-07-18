@@ -545,8 +545,8 @@ export function AgentMessages({ sessionId, sessionModelId, messagesLoaded, persi
 
   // 压缩流程进行中（含收尾窗口：compact_boundary 已到但 result 未到）
   // → 一律抑制 AgentRunningIndicator，避免压缩分隔符切换期间闪烁。
-  // compactInFlight 从点击压缩 / SDK compacting 事件开始为 true，
-  // 直到整个 stream 结束（stream state 被删除）才消失。
+  // compactInFlight 从点击压缩 / SDK compacting 事件开始为 true；终态压缩持续到 stream 结束，
+  // Pi 压缩后自动续跑时会在 compact_complete(willContinue) 提前清除。
   const suppressAgentRunning = streamState?.isCompacting || streamState?.compactInFlight
   const compactStatusInLiveMessages = React.useMemo(() => {
     return hasCompactStatus(liveMessages ?? [])

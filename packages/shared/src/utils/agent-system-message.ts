@@ -1,10 +1,11 @@
 import type { SDKSystemMessage } from '../types/agent'
 
-export type SDKCompactStatus = 'compacting' | 'success' | 'failed'
+export type SDKCompactStatus = 'compacting' | 'success' | 'failed' | 'noop'
 
 export function getSDKCompactStatus(message: SDKSystemMessage): SDKCompactStatus | undefined {
   if (message.subtype === 'compact_boundary') return 'success'
   if (message.subtype === 'compacting') return 'compacting'
+  if (message.subtype === 'compact_noop') return 'noop'
 
   if (message.subtype !== 'status') return undefined
   if (message.compact_result === 'success' || message.compact_result === 'failed') {

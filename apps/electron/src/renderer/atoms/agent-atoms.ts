@@ -88,7 +88,8 @@ export interface AgentStreamState {
   isCompacting?: boolean
   /**
    * 压缩流程是否进行中（含收尾窗口）。
-   * 从用户点击压缩 / SDK compacting 事件开始 → 到整个 stream 结束（state 被删除）前一直为 true。
+   * 从用户点击压缩 / SDK compacting 事件开始 → 到整个 stream 结束前一直为 true；
+   * 若 Pi 压缩后会自动续跑，则在 compact_complete 时提前清除。
    * 用于抑制压缩分隔符切换期间 AgentRunningIndicator 的短暂闪烁。
    */
   compactInFlight?: boolean
@@ -815,7 +816,11 @@ export function applyAgentEvent(
       return { ...prev, isCompacting: true, compactInFlight: true }
 
     case 'compact_complete':
-      return { ...prev, isCompacting: false }
+      return {
+        ...prev,
+        isCompacting: false,
+        ...(event.willContinue ? { compactInFlight: false, running: true } : {}),
+      }
 
     case 'model_resolved':
       // 不用 SDK 返回的实际模型名覆盖，保持用户选择的 modelId

@@ -7,6 +7,8 @@ describe('Agent 本轮可见消息判定', () => {
     { type: 'system', subtype: 'compacting' },
     { type: 'system', subtype: 'compact_boundary' },
     { type: 'system', subtype: 'status', compact_result: 'success' },
+    { type: 'system', subtype: 'status', compact_result: 'failed', compact_error: 'quota exhausted' },
+    { type: 'system', subtype: 'compact_noop', message: '当前上下文较小，暂时无需压缩。' },
   ] as SDKMessage[])('Given /compact 返回压缩状态 %# When 判断本轮是否有可见内容 Then 不误报空回复', (message) => {
     expect(isVisibleRunMessage(message)).toBe(true)
   })

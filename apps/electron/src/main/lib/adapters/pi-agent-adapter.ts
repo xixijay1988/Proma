@@ -64,6 +64,7 @@ import {
 } from './pi-message-adapter'
 import { DEFAULT_CONTEXT_WINDOW, buildModel } from './pi-model-registry'
 import { createPartialMessageCoalescer, type PartialMessageCoalescer } from './pi-streaming-control'
+import { createPiCompactionMessages } from './pi-compaction-messages'
 
 type PiSdk = typeof import('@earendil-works/pi-coding-agent')
 type BashOperations = import('@earendil-works/pi-coding-agent').BashOperations
@@ -1489,24 +1490,11 @@ export class PiAgentAdapter implements AgentProviderAdapter {
               } as unknown as SDKMessage)
               break
             case 'compaction_start':
-              // 压缩开始（手动 /compact 或自动阈值/溢出触发）：发前端已识别的 compacting system 消息，
-              // 展示「正在压缩上下文...」分隔符。此前迁移遗漏了该事件，导致自动压缩与手动压缩都无 UI。
-              queue.push({
-                type: 'system',
-                subtype: 'compacting',
-                session_id: session.sessionId,
-              } as unknown as SDKMessage)
-              break
             case 'compaction_end':
-              // 压缩结束：成功则发 compact_boundary 分界线（前端持久化显示「上下文已压缩」），
-              // 失败/中止则不发分界线（compacting 指示器会在本轮 result 到达时随 isCompacting 翻 false 消失）。
-              if (!event.aborted && event.result) {
-                queue.push({
-                  type: 'system',
-                  subtype: 'compact_boundary',
-                  session_id: session.sessionId,
-                  summary: event.result.summary,
-                } as unknown as SDKMessage)
+              // Pi 会在 agent_end 之后继续执行 post-run 自动压缩。完整转发开始、成功与失败状态，
+              // 让编排层保持 iterator 打开，并让前端始终得到明确的压缩结果。
+              for (const message of createPiCompactionMessages(session.sessionId, event)) {
+                queue.push(message)
               }
               break
           }
@@ -1532,18 +1520,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           })
           .catch((error) => {
             // 「会话太小无需压缩」/「已压缩」是良性情况，不是执行错误：
-            // pi 会抛 "Nothing to compact (session too small)" / "Already compacted"。
-            // 这里不 fail 队列（否则前端弹通用「执行错误」），改为正常收尾并给出友好提示。
+            // compaction_end 已经转成 compact_noop，这里只需正常收尾。
             const message = error instanceof Error ? error.message : String(error)
             if (/nothing to compact|already compacted/i.test(message)) {
-              queue.push({
-                type: 'system',
-                subtype: 'compact_noop',
-                session_id: session.sessionId,
-                message: /already compacted/i.test(message)
-                  ? '当前上下文已经压缩过，无需重复压缩。'
-                  : '当前上下文较小，暂时无需压缩。',
-              } as unknown as SDKMessage)
               queue.push({
                 type: 'result',
                 subtype: 'success',

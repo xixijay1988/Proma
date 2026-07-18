@@ -164,7 +164,7 @@ export function groupIntoTurns(messages: SDKMessage[], sessionModelId?: string):
         const startsNewCompactLifecycle = compactStatus === 'compacting'
           && previousCompactStatus !== undefined
           && previousCompactStatus !== 'compacting'
-        // 同一次压缩会依次产生 compacting、status success/failed、compact_boundary。
+        // 同一次压缩会依次产生 compacting、success/failed/noop 完成状态。
         // 这些事件共同更新一个 group，避免界面为一个压缩生命周期渲染多条分界线。
         if (
           compactStatus
@@ -278,6 +278,7 @@ export function getGroupPreview(group: MessageGroup): string {
     if (compactStatus === 'success') return '上下文已压缩'
     if (compactStatus === 'compacting') return '正在压缩上下文...'
     if (compactStatus === 'failed') return '上下文压缩失败'
+    if (compactStatus === 'noop') return '无需压缩上下文'
     if (group.message.subtype === 'permission_denied') return '权限检查已拒绝操作'
     return ''
   }

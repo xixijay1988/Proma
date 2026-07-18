@@ -233,7 +233,9 @@ function buildAgentMinimapItems(messages: SDKMessage[], userAvatar?: string): Ta
           ? '正在压缩上下文...'
           : compactStatus === 'failed'
             ? '上下文压缩失败'
-            : system.subtype === 'permission_denied'
+            : compactStatus === 'noop'
+              ? '无需压缩上下文'
+              : system.subtype === 'permission_denied'
               ? '权限检查已拒绝操作'
               : ''
       if (preview) {

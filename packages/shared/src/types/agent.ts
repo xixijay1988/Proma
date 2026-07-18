@@ -261,6 +261,8 @@ export interface SDKSystemMessage {
   compact_result?: 'success' | 'failed'
   /** SDK status: 上下文压缩失败原因 */
   compact_error?: string
+  /** Pi 压缩后是否会自动续跑当前 prompt */
+  compact_will_retry?: boolean
   summary?: string
   output_file?: string
   last_tool_name?: string
@@ -524,7 +526,7 @@ export type AgentEvent =
   | { type: 'usage_update'; usage: AgentEventUsage }
   // 上下文压缩
   | { type: 'compacting' }
-  | { type: 'compact_complete' }
+  | { type: 'compact_complete'; willContinue?: boolean }
   // 权限请求
   | { type: 'permission_request'; request: PermissionRequest }
   | { type: 'permission_resolved'; requestId: string; behavior: 'allow' | 'deny' }
