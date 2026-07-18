@@ -79,7 +79,7 @@ import { showCapabilityChangeToasts } from './lib/capabilities-toast'
 import { GlobalShortcuts } from './components/shortcuts/GlobalShortcuts'
 import { TabSwitcher } from './components/tabs/TabSwitcher'
 import { htmlToMarkdown, markdownToHtml } from './lib/markdown-rich-text'
-import { nextAgentChannelIdsAfterModelSelect } from './lib/agent-channel-selection'
+import { resolveInitialAgentRuntimeAndChannelIds } from './lib/agent-channel-selection'
 import './styles/globals.css'
 import 'katex/dist/katex.min.css'
 
@@ -220,35 +220,29 @@ function AgentSettingsInitializer(): null {
       if (settings.agentModelId && (!settings.agentChannelId || channelIds.has(settings.agentChannelId))) {
         setAgentModelId(settings.agentModelId)
       }
-      const defaultAgentRuntime = settings.agentRuntime ?? 'claude'
+      const requestedDefaultAgentRuntime = settings.agentRuntime ?? 'claude'
+      const configuredAgentChannelIds = settings.agentChannelIds ?? []
+      const {
+        runtime: defaultAgentRuntime,
+        agentChannelIds: validAgentChannelIds,
+      } = resolveInitialAgentRuntimeAndChannelIds(
+        channels,
+        configuredAgentChannelIds,
+        settings.agentChannelId,
+        requestedDefaultAgentRuntime,
+      )
       setAgentRuntime(defaultAgentRuntime)
+      setAgentChannelIds(validAgentChannelIds)
 
-      // 加载 Agent 启用渠道列表，过滤已删除的渠道
-      if (settings.agentChannelIds && settings.agentChannelIds.length > 0) {
-        const validIds = settings.agentChannelIds.filter((id) => channelIds.has(id))
-        setAgentChannelIds(validIds)
-        // 如果有渠道被清理，持久化更新后的列表
-        if (validIds.length !== settings.agentChannelIds.length) {
-          console.warn('[AgentSettings] 清理了已删除的 agentChannelIds')
-          window.electronAPI.updateSettings({ agentChannelIds: validIds }).catch(console.error)
-        }
-      } else if (settings.agentChannelId && channelIds.has(settings.agentChannelId)) {
-        // 迁移：旧版本只有 agentChannelId，自动转为数组
-        const migrated = nextAgentChannelIdsAfterModelSelect([], settings.agentChannelId, defaultAgentRuntime)
-        if (migrated.length > 0) {
-          setAgentChannelIds(migrated)
-          window.electronAPI.updateSettings({ agentChannelIds: migrated }).catch(console.error)
-        }
-      }
-
-      // 兜底：agentChannelId 存在但不在 agentChannelIds 白名单中，自动修复不一致
-      if (settings.agentChannelId && channelIds.has(settings.agentChannelId)) {
-        const currentIds = settings.agentChannelIds?.filter((id) => channelIds.has(id)) ?? []
-        const fixedIds = nextAgentChannelIdsAfterModelSelect(currentIds, settings.agentChannelId, defaultAgentRuntime)
-        if (fixedIds !== currentIds) {
-          setAgentChannelIds(fixedIds)
-          window.electronAPI.updateSettings({ agentChannelIds: fixedIds }).catch(console.error)
-        }
+      const runtimeChanged = defaultAgentRuntime !== requestedDefaultAgentRuntime
+      const channelIdsChanged = validAgentChannelIds.length !== configuredAgentChannelIds.length
+        || validAgentChannelIds.some((id, index) => id !== configuredAgentChannelIds[index])
+      if (runtimeChanged || channelIdsChanged) {
+        console.warn('[AgentSettings] 修复了 Agent runtime / 渠道使能配置')
+        window.electronAPI.updateSettings({
+          ...(runtimeChanged ? { agentRuntime: defaultAgentRuntime } : {}),
+          ...(channelIdsChanged ? { agentChannelIds: validAgentChannelIds } : {}),
+        }).catch(console.error)
       }
 
       if (settings.agentThinking) {

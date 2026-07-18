@@ -201,7 +201,7 @@ export interface AppSettings {
   agentChannelId?: string
   /** Agent 默认模型 ID */
   agentModelId?: string
-  /** Agent 启用的渠道 ID 列表（多选，Switch 开关） */
+  /** Agent 模式已启用的渠道 ID 列表（Claude/Pi 共用） */
   agentChannelIds?: string[]
   /** Agent 当前工作区 ID */
   agentWorkspaceId?: string

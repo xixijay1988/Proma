@@ -56,7 +56,7 @@ proma-v2/
 - **依赖**：`@proma/core`、`beautiful-mermaid`、`shiki`、Radix UI
 - **Peer 依赖**：`react@^18.3.0`、`react-dom@^18.3.0`
 
-#### @proma/electron (v0.15.0)
+#### @proma/electron (v0.15.4)
 - **职责**：Electron 桌面应用主体，集成所有包
 - **关键依赖**：
   - `@anthropic-ai/claude-agent-sdk@0.3.201` - Claude Agent Runtime
@@ -325,8 +325,10 @@ Proma 的 Agent 模式通过 `RuntimeRoutingAgentAdapter` 统一入口，按会�
   → SDKMessage 兼容消息流 → EventBus / IPC → Jotai / React
 ```
 
-- **Claude Runtime（默认）**：`ClaudeAgentAdapter` 使用 `@anthropic-ai/claude-agent-sdk`。它要求渠道位于 `AGENT_COMPATIBLE_PROVIDERS`，即 Anthropic Messages API 或兼容端点。
+- **Claude Runtime（默认）**：`ClaudeAgentAdapter` 使用 `@anthropic-ai/claude-agent-sdk`。它要求渠道通过 `isClaudeAgentCompatibleProvider()`，即 Anthropic Messages API 或兼容端点；OpenAI Responses 与 ChatGPT Codex 也属于 Pi-only。
 - **Pi Runtime**：在 Agent 输入框下方可直接切换；`PiAgentAdapter` 通过 `pi-model-registry.ts` 将任意已启用的 Proma 渠道注册为运行时 provider，覆盖 OpenAI Chat Completions / Responses、Google Generative AI 与 Anthropic Messages 协议。
+- **自动路由**：`resolveAgentRuntimeForProvider()` 是 provider/runtime 兼容性唯一真源。Claude 会话选择 OpenAI Chat Completions、Google 等非 Claude-compatible provider 时，renderer 先切换到 Pi，`AgentOrchestrator` 再兜底校正旧会话和其他入口；不要绕过该共享规则复制白名单判断。
+- **渠道使能**：`agentChannelIds` 是 Claude/Pi 共用的 Agent 渠道使能列表，由设置页 Toggle 控制模型选择器可见性。Pi-only 渠道可以写入该列表；协议兼容性仅决定选择后是否自动切换 runtime。
 - **会话语义**：会话元数据持久化 `agentRuntime` 与 `sdkSessionId`。切换 runtime 时必须清除旧的 `sdkSessionId`，以免跨 SDK resume；Proma 的 JSONL 消息仍保留并作为历史上下文回填。
 - **共享能力**：两套 runtime 均复用工作区、权限服务、AgentEventBus、SDKMessage 持久化、Skills 与 Proma 内置 Automation / Collaboration 工具。Pi 的用户 MCP Server 需经 `adapters/pi-mcp-tools.ts` 连接并转换为 Pi custom tools，不能假设 Pi SDK 接受 Claude 的 `mcpServers` 参数。
 - **运行时资源**：Pi runtime 需要在会话结束/取消时清理资源；不要绕开 `PiAgentAdapter` 或 `cleanupPiRuntimeResources()`。
@@ -335,7 +337,7 @@ Proma 的 Agent 模式通过 `RuntimeRoutingAgentAdapter` 统一入口，按会�
 
 1. 在 Claude 与 Pi runtime 下分别确认该行为是否应一致；不要把 Claude SDK 专有选项传给 Pi。
 2. 新增或修改工具时，检查 Claude 的 MCP 注入路径和 Pi 的 `defineTool()` / custom-tool 桥接是否都已覆盖。
-3. 新增模型渠道时，同时检查 `packages/shared/src/types/channel.ts` 的 Claude 兼容白名单与 `pi-model-registry.ts` 的协议、鉴权头、Base URL 映射。
+3. 新增模型渠道时，同时检查 `packages/shared/src/types/channel.ts` 的 Claude 兼容白名单、`resolveAgentRuntimeForProvider()` 的自动路由结果，以及 `pi-model-registry.ts` 的协议、鉴权头、Base URL 映射。
 4. 修改 IPC 时同步更新 shared 类型、main handler、preload bridge、renderer 调用。
 5. 修改打包依赖时运行 build，必要时用分发产物验证两种 runtime。
 

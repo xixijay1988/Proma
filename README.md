@@ -39,7 +39,7 @@ Proma 是一个本地优先的 AI 桌面应用，把多模型 Chat、通用 Agen
 2. 进入 **设置 > 渠道**，添加至少一个 AI 供应商渠道，填写 Base URL、API Key 和模型列表。
 3. Chat 模式可以使用 OpenAI、Anthropic、Google 或 OpenAI 兼容协议的渠道。
 4. 默认的 Claude Agent Runtime 需要 Anthropic 或 Anthropic 兼容协议渠道，例如 Anthropic、DeepSeek、Kimi API、Kimi Coding Plan。
-5. Agent 输入框下方可直接切换 Claude / Pi 内核；Pi 可使用任意已启用的模型渠道。
+5. 在 **设置 > 渠道 > Agent 渠道** 中通过 Toggle 启用需要用于 Agent 的渠道。Agent 输入框下方可切换 Claude / Pi 内核；若在 Claude 会话中选择 OpenAI Chat Completions、Google 等 Pi-only 模型，Proma 会自动切换到 Pi。
 6. 进入 **设置 > Agent**，选择默认 Agent 渠道、模型和工作区。
 7. 如需记忆、联网搜索、飞书 / 钉钉 / 微信桥接，在设置页对应 Tab 中继续配置。
 
@@ -105,9 +105,9 @@ Proma 的 Agent 模式提供两套可切换的内核：
 | --- | --- | --- | --- |
 | Anthropic / Anthropic 兼容 | 支持 | 支持 | 支持 |
 | DeepSeek、Kimi API / Coding Plan、智谱 Coding Plan、MiniMax、小米 MiMo 等 Anthropic 协议渠道 | 支持 | 支持 | 支持 |
-| OpenAI、OpenAI Responses、Google、智谱 AI、豆包、通义千问 | 支持 | 暂不支持 | 支持 |
-| OpenAI 兼容自定义端点 | 支持 | 暂不支持 | 支持 |
-| ChatGPT 订阅（Codex OAuth） | — | 支持 | 支持 |
+| OpenAI、OpenAI Responses、Google、智谱 AI、豆包、通义千问 | 支持 | 自动切换 Pi | 支持 |
+| OpenAI 兼容自定义端点 | 支持 | 自动切换 Pi | 支持 |
+| ChatGPT 订阅（Codex OAuth） | — | 自动切换 Pi | 支持 |
 
 > Pi Runtime 可在每个 Agent 会话的输入框下方直接切换；切换会开启新的底层 SDK 会话，但不会删除 Proma 中已保存的消息。Pi 会桥接工作区 Skills、用户 MCP Server，以及 Proma 内置的 Automation / Collaboration 工具；不同模型供应商对工具调用、推理和上下文长度的支持仍可能不同。
 

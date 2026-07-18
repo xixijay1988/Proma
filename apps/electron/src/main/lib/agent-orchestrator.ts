@@ -30,6 +30,7 @@ import {
   isPersistableSDKSystemMessage,
   normalizeMcpTransportType,
   inferAgentSdkContextWindow,
+  resolveAgentRuntimeForProvider,
 } from '@proma/shared'
 import type { PromaPermissionMode, AskUserRequest, ExitPlanModeRequest, SDKSystemMessage } from '@proma/shared'
 import type { ClaudeAgentQueryOptions } from './adapters/claude-agent-adapter'
@@ -981,7 +982,13 @@ export class AgentOrchestrator {
     let sessionMeta = getAgentSessionMeta(sessionId)
     // 历史会话缺失 runtime 时按 Claude 兼容；新会话创建时已持久化其默认 runtime。
     const previousAgentRuntime = normalizeAgentRuntime(sessionMeta?.agentRuntime ?? 'claude')
-    const agentRuntime = normalizeAgentRuntime(inputAgentRuntime ?? sessionMeta?.agentRuntime ?? 'claude')
+    const requestedAgentRuntime = normalizeAgentRuntime(inputAgentRuntime ?? sessionMeta?.agentRuntime ?? 'claude')
+    const agentRuntime = resolveAgentRuntimeForProvider(requestedAgentRuntime, channel.provider)
+    if (requestedAgentRuntime !== agentRuntime) {
+      console.warn(
+        `[Agent 编排] ${requestedAgentRuntime} runtime 不支持 provider=${channel.provider}，自动切换到 ${agentRuntime}`,
+      )
+    }
     if (!sessionMeta?.agentRuntime || previousAgentRuntime !== agentRuntime) {
       try {
         sessionMeta = updateAgentSessionMeta(sessionId, {

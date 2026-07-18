@@ -84,12 +84,12 @@ export const PROVIDER_LABELS: Record<ProviderType, string> = {
 }
 
 /**
- * 支持 Agent 模式的供应商类型
+ * 支持 Claude Agent Runtime 的供应商类型。
  *
- * Agent SDK 通过 Anthropic 兼容协议调用 `/v1/messages` 端点，
- * 因此所有 Anthropic 协议兼容的供应商都可以用于 Agent。
+ * Claude Agent SDK 通过 Anthropic Messages 兼容协议调用端点；OpenAI Chat
+ * Completions / Responses、Google 与 ChatGPT Codex 等协议必须由 Pi Runtime 承载。
  */
-export const AGENT_COMPATIBLE_PROVIDERS: ReadonlySet<ProviderType> = new Set<ProviderType>([
+export const CLAUDE_AGENT_COMPATIBLE_PROVIDERS: ReadonlySet<ProviderType> = new Set<ProviderType>([
   'anthropic',
   'anthropic-compatible',
   'deepseek',
@@ -102,15 +102,19 @@ export const AGENT_COMPATIBLE_PROVIDERS: ReadonlySet<ProviderType> = new Set<Pro
   'xiaomi',
   'xiaomi-token-plan',
   'qwen-anthropic',
-  'openai-responses',
-  'openai-codex',
 ])
 
-/**
- * 判断供应商是否兼容 Agent 模式
- */
+/** @deprecated 请使用 CLAUDE_AGENT_COMPATIBLE_PROVIDERS。 */
+export const AGENT_COMPATIBLE_PROVIDERS = CLAUDE_AGENT_COMPATIBLE_PROVIDERS
+
+/** 判断供应商是否兼容 Claude Agent Runtime。 */
+export function isClaudeAgentCompatibleProvider(provider: ProviderType): boolean {
+  return CLAUDE_AGENT_COMPATIBLE_PROVIDERS.has(provider)
+}
+
+/** @deprecated 请使用 isClaudeAgentCompatibleProvider。 */
 export function isAgentCompatibleProvider(provider: ProviderType): boolean {
-  return AGENT_COMPATIBLE_PROVIDERS.has(provider)
+  return isClaudeAgentCompatibleProvider(provider)
 }
 
 export interface ZhipuTeamCredentials {

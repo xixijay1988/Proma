@@ -38,7 +38,7 @@ function buildModelOptions(channels: Channel[], filterChannelId?: string, filter
   for (const channel of channels) {
     if (!channel.enabled) continue
     if (filterChannelId && channel.id !== filterChannelId) continue
-    if (filterChannelIds && filterChannelIds.length > 0 && !filterChannelIds.includes(channel.id)) continue
+    if (filterChannelIds && !filterChannelIds.includes(channel.id)) continue
 
     for (const model of channel.models) {
       if (!model.enabled) continue

@@ -3,8 +3,7 @@
  *
  * 分为两个区块：
  * 1. 渠道管理 — 所有渠道列表 + 添加/编辑/删除（渠道同时用于 Chat 和 Agent）
- * 2. Agent 供应商 — 从已启用的 Anthropic 兼容渠道（Anthropic / DeepSeek / Kimi / MiniMax）中
- *    通过 Switch 开关启用多个 Agent 供应商
+ * 2. Agent 渠道 — 控制渠道是否在 Agent 模型选择器中启用
  */
 
 import * as React from 'react'
@@ -12,7 +11,7 @@ import { useAtom, useSetAtom } from 'jotai'
 import { Plus, Pencil, Trash2, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
-import { PROVIDER_LABELS, isAgentCompatibleProvider } from '@proma/shared'
+import { PROVIDER_LABELS, isClaudeAgentCompatibleProvider } from '@proma/shared'
 import type { Channel } from '@proma/shared'
 import { getChannelLogo, PromaLogo } from '@/lib/model-logo'
 import { agentChannelIdAtom, agentModelIdAtom, agentChannelIdsAtom } from '@/atoms/agent-atoms'
@@ -73,38 +72,39 @@ export function ChannelSettings(): React.ReactElement {
     loadChannels()
   }, [loadChannels])
 
-  const syncAgentChannelEligibility = React.useCallback(async (
+  const syncAgentChannelAvailability = React.useCallback(async (
     channel: Channel,
-    eligible: boolean,
+    available: boolean,
   ): Promise<void> => {
     const currentIds = agentChannelIdsRef.current
+    const updates: Parameters<typeof window.electronAPI.updateSettings>[0] = {}
 
-    if (eligible) {
-      if (currentIds.includes(channel.id)) return
-      const newIds = [...currentIds, channel.id]
+    let newIds = currentIds
+    if (available && !currentIds.includes(channel.id)) {
+      newIds = [...currentIds, channel.id]
+    } else if (!available && currentIds.includes(channel.id)) {
+      newIds = currentIds.filter((id) => id !== channel.id)
+    }
+    if (newIds !== currentIds) {
       agentChannelIdsRef.current = newIds
       setAgentChannelIds(newIds)
-      await window.electronAPI.updateSettings({ agentChannelIds: newIds }).catch(console.error)
-      return
+      updates.agentChannelIds = newIds
     }
 
-    if (!currentIds.includes(channel.id)) return
-    const newIds = currentIds.filter((id) => id !== channel.id)
-    agentChannelIdsRef.current = newIds
-    setAgentChannelIds(newIds)
-
-    const updates: Parameters<typeof window.electronAPI.updateSettings>[0] = {
-      agentChannelIds: newIds,
-    }
     if (agentChannelIdRef.current === channel.id) {
-      agentChannelIdRef.current = null
-      setAgentChannelId(null)
-      setAgentModelId(null)
-      updates.agentChannelId = undefined
-      updates.agentModelId = undefined
+      if (!channel.enabled) {
+        // 渠道被禁用后清空默认 Agent 选择。
+        agentChannelIdRef.current = null
+        setAgentChannelId(null)
+        setAgentModelId(null)
+        updates.agentChannelId = undefined
+        updates.agentModelId = undefined
+      }
     }
 
-    await window.electronAPI.updateSettings(updates).catch(console.error)
+    if (Object.keys(updates).length > 0) {
+      await window.electronAPI.updateSettings(updates).catch(console.error)
+    }
   }, [setAgentChannelIds, setAgentChannelId, setAgentModelId])
 
   /** 删除渠道（通过弹窗确认） */
@@ -145,9 +145,9 @@ export function ChannelSettings(): React.ReactElement {
   const handleToggle = async (channel: Channel): Promise<void> => {
     try {
       const savedChannel = await window.electronAPI.updateChannel(channel.id, { enabled: !channel.enabled })
-      await syncAgentChannelEligibility(
+      await syncAgentChannelAvailability(
         savedChannel,
-        savedChannel.enabled && isAgentCompatibleProvider(savedChannel.provider),
+        savedChannel.enabled,
       )
 
       await loadChannels()
@@ -156,12 +156,15 @@ export function ChannelSettings(): React.ReactElement {
     }
   }
 
-  /** 切换 Agent 供应商开关 */
+  /** 切换 Agent 渠道使能状态 */
   const handleToggleAgentProvider = async (channelId: string, enabled: boolean): Promise<void> => {
+    const currentIds = agentChannelIdsRef.current
     const newIds = enabled
-      ? [...agentChannelIds, channelId]
-      : agentChannelIds.filter((id) => id !== channelId)
+      ? currentIds.includes(channelId) ? currentIds : [...currentIds, channelId]
+      : currentIds.filter((id) => id !== channelId)
 
+    if (newIds === currentIds) return
+    agentChannelIdsRef.current = newIds
     setAgentChannelIds(newIds)
 
     // 如果关闭的是当前选中的渠道，清空选择
@@ -198,16 +201,14 @@ export function ChannelSettings(): React.ReactElement {
       <ChannelForm
         channel={editingChannel}
         onSaved={handleFormSaved}
-        onAgentEligibilityChange={syncAgentChannelEligibility}
+        onAgentAvailabilityChange={syncAgentChannelAvailability}
         onCancel={handleFormCancel}
       />
     )
   }
 
-  // Agent 兼容渠道（已启用）：Anthropic 协议家族 / OpenAI Responses / ChatGPT Codex
-  const agentCapableChannels = channels.filter(
-    (c) => isAgentCompatibleProvider(c.provider) && c.enabled
-  )
+  // Agent 渠道列表：渠道本身启用后，仍需通过下方 Toggle 控制是否进入 Agent。
+  const agentChannels = channels.filter((channel) => channel.enabled)
 
   // 列表视图
   return (
@@ -215,7 +216,7 @@ export function ChannelSettings(): React.ReactElement {
       {/* 区块一：模型配置 */}
       <SettingsSection
         title="模型配置"
-        description="管理 AI 供应商连接，配置 API Key 和可用模型。Anthropic 渠道同时可用于 Agent 模式"
+        description="管理 AI 供应商连接，配置 API Key 和可用模型。Claude-compatible 渠道可用于 Claude 内核，其他已启用渠道可用于 Pi 内核"
         action={
           <Button size="sm" onClick={() => setViewMode('create')}>
             <Plus size={16} />
@@ -252,32 +253,36 @@ export function ChannelSettings(): React.ReactElement {
         )}
       </SettingsSection>
 
-      {/* 区块二：Agent 供应商 */}
+      {/* 区块二：Agent 渠道 */}
       <SettingsSection
-        title="Agent 供应商"
-        description="启用 Agent 模式可用的供应商，支持同时开启多个渠道，在 Agent 模式下可直接切换"
+        title="Agent 渠道"
+        description="下方 Toggle 控制渠道是否出现在 Agent 模型选择器中。Claude-compatible 渠道可使用 Claude/Pi，OpenAI 兼容等 Pi-only 渠道开启后选择模型会自动切换到 Pi。"
       >
         <SettingsCard>
           <PromaProviderCard />
         </SettingsCard>
         {loading ? (
           <div className="text-sm text-muted-foreground py-8 text-center">加载中...</div>
-        ) : agentCapableChannels.length === 0 ? (
+        ) : agentChannels.length === 0 ? (
           <SettingsCard divided={false}>
             <div className="text-sm text-muted-foreground py-8 text-center">
-              暂无可用的 Anthropic 兼容渠道，请先在上方添加 Anthropic / DeepSeek / Kimi / MiniMax 渠道并启用
+              暂无已启用渠道，请先在上方添加并启用一个模型渠道
             </div>
           </SettingsCard>
         ) : (
           <SettingsCard>
-            {agentCapableChannels.map((channel) => (
-              <AgentProviderRow
-                key={channel.id}
-                channel={channel}
-                enabled={agentChannelIds.includes(channel.id)}
-                onToggle={(enabled) => handleToggleAgentProvider(channel.id, enabled)}
-              />
-            ))}
+            {agentChannels.map((channel) => {
+              const claudeCompatible = isClaudeAgentCompatibleProvider(channel.provider)
+              return (
+                <AgentProviderRow
+                  key={channel.id}
+                  channel={channel}
+                  claudeCompatible={claudeCompatible}
+                  enabled={agentChannelIds.includes(channel.id)}
+                  onToggle={(enabled) => handleToggleAgentProvider(channel.id, enabled)}
+                />
+              )
+            })}
           </SettingsCard>
         )}
       </SettingsSection>
@@ -315,7 +320,7 @@ function ChannelRow({ channel, onEdit, onDelete, onToggle }: ChannelRowProps): R
   const description = [
     PROVIDER_LABELS[channel.provider],
     enabledCount > 0 ? `${enabledCount} 个模型已启用` : undefined,
-    isAgentCompatibleProvider(channel.provider) ? '可用于 Agent' : undefined,
+    isClaudeAgentCompatibleProvider(channel.provider) ? 'Claude / Pi Agent' : 'Pi Agent',
   ]
     .filter(Boolean)
     .join(' · ')
@@ -354,19 +359,21 @@ function ChannelRow({ channel, onEdit, onDelete, onToggle }: ChannelRowProps): R
   )
 }
 
-// ===== Agent 供应商行子组件 =====
+// ===== Agent 渠道行子组件 =====
 
 interface AgentProviderRowProps {
   channel: Channel
+  claudeCompatible: boolean
   enabled: boolean
   onToggle: (enabled: boolean) => void
 }
 
-function AgentProviderRow({ channel, enabled, onToggle }: AgentProviderRowProps): React.ReactElement {
+function AgentProviderRow({ channel, claudeCompatible, enabled, onToggle }: AgentProviderRowProps): React.ReactElement {
   const enabledCount = channel.models.filter((m) => m.enabled).length
   const description = [
     PROVIDER_LABELS[channel.provider],
     enabledCount > 0 ? `${enabledCount} 个模型可用` : undefined,
+    claudeCompatible ? 'Claude / Pi Agent' : 'Pi Agent（选择后自动切换内核）',
   ]
     .filter(Boolean)
     .join(' · ')

@@ -72,6 +72,28 @@ describe('Pi runtime 模型 ID [1m] 剥离', () => {
   })
 })
 
+describe('Pi runtime OpenAI Chat Completions 兼容渠道', () => {
+  test('Given custom 渠道和完整 chat/completions 地址 When buildModel Then 注册正确协议根地址', async () => {
+    const sdk = await import('@earendil-works/pi-coding-agent')
+    const result = await buildModel(sdk, {
+      sessionId: 'session-custom-completions',
+      prompt: 'hi',
+      apiKey: 'sk-test',
+      provider: 'custom',
+      baseUrl: 'https://api.example.com/v1/chat/completions',
+      model: 'custom-model',
+      permissionMode: 'plan',
+      systemPrompt: 'system',
+      piAgentDir: '/tmp/pi-agent',
+      piSessionDir: '/tmp/pi-session',
+    })
+
+    expect(result.model.id).toBe('custom-model')
+    expect(result.model.api).toBe('openai-completions')
+    expect(result.model.baseUrl).toBe('https://api.example.com/v1')
+  })
+})
+
 describe('Pi runtime OpenAI Responses 渠道', () => {
   test('Given openai-responses 渠道 When buildModel Then 注册为 Pi openai-responses 协议', async () => {
     const sdk = await import('@earendil-works/pi-coding-agent')

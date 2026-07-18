@@ -32,7 +32,6 @@ import { Input } from '@/components/ui/input'
 import {
   PROVIDER_DEFAULT_URLS,
   PROVIDER_LABELS,
-  isAgentCompatibleProvider,
   parseZhipuTeamCredentials,
   parseCodexCredentials,
 } from '@proma/shared'
@@ -69,7 +68,8 @@ interface ChannelFormProps {
   /** 编辑模式下传入已有渠道，创建模式传 null */
   channel: Channel | null
   onSaved: (channel?: Channel) => void
-  onAgentEligibilityChange?: (channel: Channel, eligible: boolean) => void | Promise<void>
+  /** 渠道是否可加入 Agent 使能列表发生变化 */
+  onAgentAvailabilityChange?: (channel: Channel, available: boolean) => void | Promise<void>
   onCancel: () => void
 }
 
@@ -184,11 +184,11 @@ function buildZhipuTeamSecret(secret: ZhipuTeamSecretForm): string {
 /** auto-save 防抖延迟 */
 const AUTO_SAVE_DELAY = 600
 
-function isAgentEligibleChannel(channel: Pick<Channel, 'provider' | 'enabled'>): boolean {
-  return channel.enabled && isAgentCompatibleProvider(channel.provider)
+function isAgentAvailableChannel(channel: Pick<Channel, 'enabled'>): boolean {
+  return channel.enabled
 }
 
-export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCancel }: ChannelFormProps): React.ReactElement {
+export function ChannelForm({ channel, onSaved, onAgentAvailabilityChange, onCancel }: ChannelFormProps): React.ReactElement {
   const isEdit = channel !== null
 
   // 表单状态
@@ -219,10 +219,10 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
   const [codexLoggingIn, setCodexLoggingIn] = React.useState(false)
 
   const setChannelFormDirty = useSetAtom(channelFormDirtyAtom)
-  const lastAgentEligibleRef = React.useRef(channel ? isAgentEligibleChannel(channel) : false)
+  const lastAgentAvailableRef = React.useRef(channel ? isAgentAvailableChannel(channel) : false)
 
   React.useEffect(() => {
-    lastAgentEligibleRef.current = channel ? isAgentEligibleChannel(channel) : false
+    lastAgentAvailableRef.current = channel ? isAgentAvailableChannel(channel) : false
   }, [channel])
 
   /** 编辑模式下加载明文 API Key */
@@ -284,17 +284,17 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
         models: currentModels,
         enabled: currentEnabled,
       })
-      const eligible = isAgentEligibleChannel(savedChannel)
-      if (eligible !== lastAgentEligibleRef.current) {
-        lastAgentEligibleRef.current = eligible
-        await onAgentEligibilityChange?.(savedChannel, eligible)
+      const available = isAgentAvailableChannel(savedChannel)
+      if (available !== lastAgentAvailableRef.current) {
+        lastAgentAvailableRef.current = available
+        await onAgentAvailabilityChange?.(savedChannel, available)
       }
       toast.success('已保存', { id: 'auto-save-success' })
     } catch (error) {
       console.error('[模型配置表单] auto-save 失败:', error)
       toast.error('自动保存失败，请检查后手动重试', { id: 'auto-save-error' })
     }
-  }, [isEdit, channel, onAgentEligibilityChange])
+  }, [isEdit, channel, onAgentAvailabilityChange])
 
   /** 触发防抖 auto-save */
   const scheduleAutoSave = React.useCallback((
@@ -478,8 +478,8 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
           enabled,
         }
         const saved = await window.electronAPI.createChannel(input)
-        if (isAgentEligibleChannel(saved)) {
-          await onAgentEligibilityChange?.(saved, true)
+        if (isAgentAvailableChannel(saved)) {
+          await onAgentAvailabilityChange?.(saved, true)
         }
         toast.success('ChatGPT 渠道已创建')
         onSaved(saved)
@@ -575,8 +575,8 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
         enabled,
       }
       const savedChannel = await window.electronAPI.createChannel(input)
-      if (isAgentEligibleChannel(savedChannel)) {
-        await onAgentEligibilityChange?.(savedChannel, true)
+      if (isAgentAvailableChannel(savedChannel)) {
+        await onAgentAvailabilityChange?.(savedChannel, true)
       }
       toast.success('渠道创建成功')
       return savedChannel
@@ -587,7 +587,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
     } finally {
       setSaving(false)
     }
-  }, [name, provider, baseUrl, effectiveApiKey, hasRequiredSecret, models, enabled, onAgentEligibilityChange])
+  }, [name, provider, baseUrl, effectiveApiKey, hasRequiredSecret, models, enabled, onAgentAvailabilityChange])
 
   /** 创建渠道（仅新建模式） */
   const handleCreate = async (): Promise<void> => {

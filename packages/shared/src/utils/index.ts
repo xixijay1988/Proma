@@ -36,3 +36,4 @@ export {
   isPersistableSDKSystemMessage,
   type SDKCompactStatus,
 } from './agent-system-message'
+export { resolveAgentRuntimeForProvider } from './agent-runtime-selection'

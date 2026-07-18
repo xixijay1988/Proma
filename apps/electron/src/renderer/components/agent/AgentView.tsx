@@ -55,7 +55,10 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { cn } from '@/lib/utils'
-import { nextAgentChannelIdsAfterModelSelect } from '@/lib/agent-channel-selection'
+import {
+  nextAgentChannelIdsAfterModelSelect,
+  resolveSelectableAgentChannelIds,
+} from '@/lib/agent-channel-selection'
 import { getActiveAccelerator, getAcceleratorDisplay } from '@/lib/shortcut-registry'
 import { registerShortcut } from '@/lib/shortcut-registry'
 import { supportsChannelPlanQuota } from '@/lib/channel-plan-quota'
@@ -114,7 +117,13 @@ import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
 import type { AgentRuntime, AgentSendInput, AgentPendingFile, FileDialogLargeFile, ModelOption, SDKMessage, SDKUserMessage, ProviderType } from '@proma/shared'
-import { inferAgentSdkContextWindow, inferContextWindow, isCodexFastModeSupportedModel, MAX_ATTACHMENT_SIZE } from '@proma/shared'
+import {
+  inferAgentSdkContextWindow,
+  inferContextWindow,
+  isCodexFastModeSupportedModel,
+  MAX_ATTACHMENT_SIZE,
+  resolveAgentRuntimeForProvider,
+} from '@proma/shared'
 import { fileToBase64, formatFileNames, getFileParentPath } from '@/lib/file-utils'
 import { buildQuotedSelectionBlock } from '@/lib/quoted-selection'
 import { createClipboardPendingFile, createClipboardTextDraft, makeUniqueAttachmentName } from '@/lib/clipboard-text-attachment'
@@ -654,6 +663,10 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     () => globalChannels.find((c) => c.id === agentChannelId)?.provider,
     [globalChannels, agentChannelId],
   )
+  const selectableAgentChannelIds = React.useMemo(
+    () => resolveSelectableAgentChannelIds(globalChannels, agentChannelIds),
+    [globalChannels, agentChannelIds],
+  )
   const isCodexFastModeAvailable = hasSessionMeta
     && sessionAgentRuntime === 'pi'
     && agentChannelProvider === 'openai-codex'
@@ -665,16 +678,12 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     // Proma 官方渠道（商业版）：只要 enabled 且有可用模型，直接视为可用
     const promaOfficial = globalChannels.find((c) => c.id === 'proma-official')
     if (promaOfficial?.enabled && promaOfficial.models.some((m) => m.enabled)) return true
-    // Pi runtime 支持所有协议，任何已启用渠道都可用
-    if (sessionAgentRuntime === 'pi') {
-      return globalChannels.some((c) => c.enabled && c.models.some((m) => m.enabled))
-    }
-    // Claude runtime：需在 agentChannelIds 白名单中
-    if (!agentChannelIds || agentChannelIds.length === 0) return false
-    return globalChannels.some(
-      (c) => c.enabled && agentChannelIds.includes(c.id) && c.models.some((m) => m.enabled),
-    )
-  }, [globalChannels, agentChannelIds, sessionAgentRuntime])
+    return globalChannels.some((channel) => (
+      channel.enabled
+      && channel.models.some((model) => model.enabled)
+      && (selectableAgentChannelIds === undefined || selectableAgentChannelIds.includes(channel.id))
+    ))
+  }, [globalChannels, selectableAgentChannelIds])
   React.useEffect(() => {
     if (!agentChannelId || agentModelId) return
 
@@ -1740,71 +1749,20 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     }
   }, [sessionId, addFilesAsAttachments, setAttachedDirsMap])
 
-  /** ModelSelector 选择回调 */
-  const handleModelSelect = React.useCallback((option: ModelOption): void => {
-    // 更新当前会话的 per-session 配置
-    setSessionChannelMap((prev) => {
-      const map = new Map(prev)
-      map.set(sessionId, option.channelId)
-      return map
-    })
-    setSessionModelMap((prev) => {
-      const map = new Map(prev)
-      map.set(sessionId, option.modelId)
-      return map
-    })
-    setAgentSessions((prev) => prev.map((session) => (
-      session.id === sessionId
-        ? { ...session, channelId: option.channelId, modelId: option.modelId }
-        : session
-    )))
-
-    // 模型切换时：清除旧的 contextWindow，让 result 重新提供真实值
-    setStreamingStates((prev) => {
-      const state = prev.get(sessionId)
-      if (!state) return prev
-      const map = new Map(prev)
-      map.set(sessionId, { ...state, contextWindow: undefined })
-      return map
-    })
-
-    const updatedChannelIds = nextAgentChannelIdsAfterModelSelect(
-      agentChannelIds,
-      option.channelId,
-      sessionAgentRuntime,
-    )
-    if (updatedChannelIds !== agentChannelIds) {
-      setAgentChannelIds(updatedChannelIds)
-    }
-
-    // 同时更新全局默认值（新会话继承）
-    setDefaultChannelId(option.channelId)
-    setDefaultModelId(option.modelId)
-
-    // 持久化到设置
-    window.electronAPI.updateSettings({
-      agentChannelId: option.channelId,
-      agentModelId: option.modelId,
-      agentChannelIds: updatedChannelIds,
-    }).catch(console.error)
-
-    window.electronAPI.updateAgentSessionModel(sessionId, option.channelId, option.modelId)
-      .then((updated) => {
-        setAgentSessions((prev) => prev.map((session) => (
-          session.id === updated.id ? updated : session
-        )))
-      })
-      .catch(console.error)
-  }, [sessionId, setSessionChannelMap, setSessionModelMap, setDefaultChannelId, setDefaultModelId, agentChannelIds, sessionAgentRuntime, setAgentChannelIds, setAgentSessions])
-
-  const handleAgentRuntimeChange = React.useCallback(async (runtime: AgentRuntime): Promise<void> => {
+  const persistAgentRuntimeChange = React.useCallback(async (
+    runtime: AgentRuntime,
+    options: { focusInput?: boolean } = {},
+  ): Promise<boolean> => {
+    const focusInput = options.focusInput ?? true
     if (runtime === sessionAgentRuntime) {
-      requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-input-mode="agent"] .ProseMirror')?.focus())
-      return
+      if (focusInput) {
+        requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-input-mode="agent"] .ProseMirror')?.focus())
+      }
+      return true
     }
     if (streaming || backgroundWaiting) {
       toast.info('Agent 运行中，完成后再切换内核')
-      return
+      return false
     }
 
     const previousDefaultRuntime = agentRuntime
@@ -1824,6 +1782,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       window.electronAPI.updateSettings({ agentRuntime: runtime }).catch((error) => {
         console.error('[AgentView] 保存 Agent Runtime 默认值失败:', error)
       })
+      return true
     } catch (error) {
       console.error('[AgentView] 切换 Agent Runtime 失败:', error)
       setAgentRuntime(previousDefaultRuntime)
@@ -1831,8 +1790,11 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
         setAgentSessions((prev) => prev.map((item) => item.id === sessionId ? previousSessionMeta : item))
       }
       toast.error('Agent Runtime 切换失败', { description: getErrorMessage(error) })
+      return false
     } finally {
-      requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-input-mode="agent"] .ProseMirror')?.focus())
+      if (focusInput) {
+        requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-input-mode="agent"] .ProseMirror')?.focus())
+      }
     }
   }, [
     agentRuntime,
@@ -1844,6 +1806,93 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
     setAgentSessions,
     streaming,
   ])
+
+  /** ModelSelector 选择回调 */
+  const handleModelSelect = React.useCallback(async (option: ModelOption): Promise<void> => {
+    const targetChannel = globalChannels.find((channel) => channel.id === option.channelId)
+    if (!targetChannel) {
+      toast.error('模型渠道不存在或已被删除')
+      return
+    }
+
+    const targetRuntime = resolveAgentRuntimeForProvider(sessionAgentRuntime, targetChannel.provider)
+    if (targetRuntime !== sessionAgentRuntime) {
+      const switched = await persistAgentRuntimeChange(targetRuntime, { focusInput: false })
+      if (!switched) return
+      toast.info('该模型需要 Pi 内核，已自动切换')
+    }
+
+    // 更新当前会话的 per-session 配置
+    setSessionChannelMap((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, option.channelId)
+      return map
+    })
+    setSessionModelMap((prev) => {
+      const map = new Map(prev)
+      map.set(sessionId, option.modelId)
+      return map
+    })
+    setAgentSessions((prev) => prev.map((session) => (
+      session.id === sessionId
+        ? { ...session, channelId: option.channelId, modelId: option.modelId, agentRuntime: targetRuntime }
+        : session
+    )))
+
+    // 模型切换时清除旧的 contextWindow，让 result 重新提供真实值。
+    setStreamingStates((prev) => {
+      const state = prev.get(sessionId)
+      if (!state) return prev
+      const map = new Map(prev)
+      map.set(sessionId, { ...state, contextWindow: undefined })
+      return map
+    })
+
+    const updatedChannelIds = nextAgentChannelIdsAfterModelSelect(
+      agentChannelIds,
+      option.channelId,
+    )
+    if (updatedChannelIds !== agentChannelIds) {
+      setAgentChannelIds(updatedChannelIds)
+    }
+
+    // 同时更新全局默认值（新会话继承）
+    setDefaultChannelId(option.channelId)
+    setDefaultModelId(option.modelId)
+
+    // 持久化到设置，保证新会话不会出现 Claude + Pi-only 模型的不一致组合。
+    window.electronAPI.updateSettings({
+      agentChannelId: option.channelId,
+      agentModelId: option.modelId,
+      agentChannelIds: updatedChannelIds,
+      agentRuntime: targetRuntime,
+    }).catch(console.error)
+
+    window.electronAPI.updateAgentSessionModel(sessionId, option.channelId, option.modelId)
+      .then((updated) => {
+        setAgentSessions((prev) => prev.map((session) => (
+          session.id === updated.id ? updated : session
+        )))
+      })
+      .catch(console.error)
+  }, [
+    agentChannelIds,
+    globalChannels,
+    persistAgentRuntimeChange,
+    sessionAgentRuntime,
+    sessionId,
+    setAgentChannelIds,
+    setAgentSessions,
+    setDefaultChannelId,
+    setDefaultModelId,
+    setSessionChannelMap,
+    setSessionModelMap,
+    setStreamingStates,
+  ])
+
+  const handleAgentRuntimeChange = React.useCallback(async (runtime: AgentRuntime): Promise<void> => {
+    await persistAgentRuntimeChange(runtime)
+  }, [persistAgentRuntimeChange])
 
   const handleCodexFastModeChange = React.useCallback(async (): Promise<void> => {
     if (!isCodexFastModeAvailable || streaming || backgroundWaiting || !sessionMeta) return
@@ -2525,7 +2574,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       key: 'model',
       node: (
         <ModelSelector
-          filterChannelIds={sessionAgentRuntime === 'pi' ? undefined : agentChannelIds}
+          filterChannelIds={selectableAgentChannelIds}
           externalSelectedModel={externalSelectedModel}
           onModelSelect={handleModelSelect}
           useSharedOpenState
@@ -2652,7 +2701,7 @@ export function AgentView({ sessionId }: { sessionId: string }): React.ReactElem
       ),
     },
   ], [
-    agentChannelIds,
+    selectableAgentChannelIds,
     agentChannelId,
     planQuotaChannelId,
     planQuotaChannelUpdatedAt,

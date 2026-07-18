@@ -33,7 +33,7 @@ If you want fewer API setup steps, you can also use the [Proma commercial versio
 2. Go to **Settings > Channels**, add at least one AI provider channel, and fill in Base URL, API Key, and model list.
 3. Chat mode can use OpenAI, Anthropic, Google, or OpenAI-compatible channels.
 4. The default Claude Agent Runtime requires an Anthropic or Anthropic-compatible channel, such as Anthropic, DeepSeek, Kimi API, or Kimi Coding Plan.
-5. Switch Claude / Pi directly below the Agent input. Pi can use any enabled model channel.
+5. Enable the channels you want to use from **Settings > Channels > Agent Channels**, then switch Claude / Pi below the Agent input. If you select an OpenAI Chat Completions, Google, or other Pi-only model from a Claude session, Proma automatically switches that session to Pi.
 6. Go to **Settings > Agent** and choose the default Agent channel, model, and workspace.
 7. Configure memory, web search, or Feishu / DingTalk / WeChat bridges from their corresponding settings tabs if needed.
 
@@ -101,9 +101,9 @@ Proma provides two switchable Agent runtimes:
 | --- | --- | --- | --- |
 | Anthropic / Anthropic-compatible | Supported | Supported | Supported |
 | Anthropic-protocol channels such as DeepSeek, Kimi API / Coding Plan, Zhipu Coding Plan, MiniMax, and Xiaomi MiMo | Supported | Supported | Supported |
-| OpenAI, OpenAI Responses, Google, Zhipu AI, Doubao, and Qwen | Supported | Not yet | Supported |
-| Custom OpenAI-compatible endpoints | Supported | Not yet | Supported |
-| ChatGPT subscription (Codex OAuth) | — | Supported | Supported |
+| OpenAI, OpenAI Responses, Google, Zhipu AI, Doubao, and Qwen | Supported | Auto-switches to Pi | Supported |
+| Custom OpenAI-compatible endpoints | Supported | Auto-switches to Pi | Supported |
+| ChatGPT subscription (Codex OAuth) | — | Auto-switches to Pi | Supported |
 
 > Pi Runtime can be switched directly below the input of each Agent session. Switching starts a new underlying SDK session but does not delete Proma's saved messages. Pi bridges workspace Skills, user-configured MCP servers, and Proma's built-in Automation / Collaboration tools. Tool calling, reasoning, and context capabilities still vary by model provider.
 
