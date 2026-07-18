@@ -241,6 +241,8 @@ export interface ChannelModel {
   enabled: boolean
   /** 来源标记：手动添加的模型在拉取供应商列表时保留，不会被覆盖清除 */
   source?: 'manual' | 'fetched'
+  /** 用户自定义上下文窗口（token）；缺省时采用 Runtime catalog / Proma 推断 */
+  contextWindow?: number
 }
 
 /**

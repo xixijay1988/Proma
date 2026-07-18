@@ -19,6 +19,13 @@ export {
 } from './context-window'
 export { calculateContextUsageRatio } from './context-usage'
 export {
+  MIN_CUSTOM_CONTEXT_WINDOW,
+  MAX_CUSTOM_CONTEXT_WINDOW,
+  parseContextWindowInput,
+  formatContextWindowInput,
+  type ContextWindowInputResult,
+} from './context-window-input'
+export {
   inferMcpTransportType,
   normalizeMcpTransportType,
 } from './mcp-transport'
