@@ -47,6 +47,7 @@ import type {
 import { resolveAnthropicMessagesUrl, resolveOpenAIChatCompletionsUrl, resolveOpenAIResponsesUrl } from '@proma/core'
 import { getProviderLogo } from '@/lib/model-logo'
 import { mergeFetchedChannelModels } from '@/lib/channel-model-merge'
+import { ModelContextWindowField } from './ModelContextWindowField'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   AlertDialog,
@@ -201,6 +202,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
   const [showApiKey, setShowApiKey] = React.useState(false)
   const [models, setModels] = React.useState<ChannelModel[]>(channel?.models ?? [])
   const [enabled, setEnabled] = React.useState(channel?.enabled ?? true)
+  const [invalidContextWindowModelIds, setInvalidContextWindowModelIds] = React.useState<Set<string>>(() => new Set())
 
   // 新模型输入
   const [newModelId, setNewModelId] = React.useState('')
@@ -261,6 +263,38 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
     })
   }, [])
 
+  const handleContextWindowChange = React.useCallback((modelId: string, value: number | undefined) => {
+    setModels((prev) => prev.map((model) => {
+      if (model.id !== modelId) return model
+      if (value === undefined) {
+        const { contextWindow: _removed, ...rest } = model
+        return rest
+      }
+      return { ...model, contextWindow: value }
+    }))
+  }, [])
+
+  const handleContextWindowValidityChange = React.useCallback((modelId: string, valid: boolean) => {
+    setInvalidContextWindowModelIds((prev) => {
+      const hasModel = prev.has(modelId)
+      if ((valid && !hasModel) || (!valid && hasModel)) return prev
+      const next = new Set(prev)
+      if (valid) next.delete(modelId)
+      else next.add(modelId)
+      return next
+    })
+  }, [])
+
+  React.useEffect(() => {
+    const currentIds = new Set(models.map((model) => model.id))
+    setInvalidContextWindowModelIds((prev) => {
+      const next = new Set(Array.from(prev).filter((modelId) => currentIds.has(modelId)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [models])
+
+  const hasInvalidContextWindow = invalidContextWindowModelIds.size > 0
+
   // ===== Auto-save（仅编辑模式） =====
   const autoSaveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   /** 初始化完成标志，避免加载时触发 auto-save */
@@ -308,10 +342,11 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
   ) => {
     if (!isEdit || !initializedRef.current) return
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
+    if (hasInvalidContextWindow) return
     autoSaveTimerRef.current = setTimeout(() => {
       doAutoSave(nextModels, nextName, nextProvider, nextBaseUrl, nextApiKey, nextEnabled)
     }, AUTO_SAVE_DELAY)
-  }, [isEdit, doAutoSave])
+  }, [isEdit, doAutoSave, hasInvalidContextWindow])
 
   // API Key 加载完成后标记初始化
   React.useEffect(() => {
@@ -555,6 +590,10 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
   /** 执行创建渠道 */
   const doCreate = React.useCallback(async (): Promise<Channel | null> => {
     if (!name.trim() || !hasRequiredSecret) return null
+    if (hasInvalidContextWindow) {
+      toast.error('请先修正模型上下文大小')
+      return null
+    }
 
     setSaving(true)
     try {
@@ -579,7 +618,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
     } finally {
       setSaving(false)
     }
-  }, [name, provider, baseUrl, effectiveApiKey, hasRequiredSecret, models, enabled, onAgentEligibilityChange])
+  }, [name, provider, baseUrl, effectiveApiKey, hasRequiredSecret, hasInvalidContextWindow, models, enabled, onAgentEligibilityChange])
 
   /** 创建渠道（仅新建模式） */
   const handleCreate = async (): Promise<void> => {
@@ -671,7 +710,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
           <Button
             size="sm"
             onClick={handleCreate}
-            disabled={saving || !name.trim() || !hasRequiredSecret}
+            disabled={saving || !name.trim() || !hasRequiredSecret || hasInvalidContextWindow}
           >
             {saving && <Loader2 size={14} className="animate-spin" />}
             <span>创建</span>
@@ -868,25 +907,30 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
           ) : (
             <div className="divide-y divide-border/50">
               {enabledModels.map((model) => (
-                <div
-                  key={model.id}
-                  className="flex items-center gap-2 px-4 py-2.5 group"
-                >
-                  <CheckCircle2 size={14} className="text-emerald-500 flex-shrink-0" />
-                  <span className="text-sm text-foreground flex-1">
-                    {model.name}
-                    {model.name !== model.id && (
-                      <span className="text-muted-foreground ml-1">({model.id})</span>
-                    )}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => handleToggleModel(model.id)}
-                    className="p-0.5 text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100"
-                    title="取消启用"
-                  >
-                    <X size={14} />
-                  </button>
+                <div key={model.id} className="px-4 py-2.5 group">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 size={14} className="text-emerald-500 flex-shrink-0" />
+                    <span className="text-sm text-foreground flex-1">
+                      {model.name}
+                      {model.name !== model.id && (
+                        <span className="text-muted-foreground ml-1">({model.id})</span>
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleModel(model.id)}
+                      className="p-0.5 text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100"
+                      title="取消启用"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <ModelContextWindowField
+                    modelId={model.id}
+                    value={model.contextWindow}
+                    onValidChange={(value) => handleContextWindowChange(model.id, value)}
+                    onValidityChange={handleContextWindowValidityChange}
+                  />
                 </div>
               ))}
             </div>
@@ -956,24 +1000,32 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
               {availableModels.map((model) => (
                 <div
                   key={model.id}
-                  className="flex items-center gap-2 px-4 py-2.5 group cursor-pointer hover:bg-muted/30 transition-colors"
+                  className="px-4 py-2.5 group cursor-pointer hover:bg-muted/30 transition-colors"
                   onClick={() => handleToggleModel(model.id)}
                 >
-                  <Plus size={14} className="text-muted-foreground flex-shrink-0" />
-                  <span className="text-sm text-foreground flex-1">
-                    {model.name}
-                    {model.name !== model.id && (
-                      <span className="text-muted-foreground ml-1">({model.id})</span>
-                    )}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={(e) => { e.stopPropagation(); handleRemoveModel(model.id) }}
-                    className="p-0.5 text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100"
-                    title="删除"
-                  >
-                    <X size={14} />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <Plus size={14} className="text-muted-foreground flex-shrink-0" />
+                    <span className="text-sm text-foreground flex-1">
+                      {model.name}
+                      {model.name !== model.id && (
+                        <span className="text-muted-foreground ml-1">({model.id})</span>
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); handleRemoveModel(model.id) }}
+                      className="p-0.5 text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100"
+                      title="删除"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <ModelContextWindowField
+                    modelId={model.id}
+                    value={model.contextWindow}
+                    onValidChange={(value) => handleContextWindowChange(model.id, value)}
+                    onValidityChange={handleContextWindowValidityChange}
+                  />
                 </div>
               ))}
 
@@ -1048,7 +1100,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
             <AlertDialogCancel onClick={handleDiscard}>放弃编辑</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleSaveAndClose}
-              disabled={saving || !name.trim() || !hasRequiredSecret}
+              disabled={saving || !name.trim() || !hasRequiredSecret || hasInvalidContextWindow}
             >
               {saving ? <><Loader2 size={14} className="animate-spin" /> 保存中...</> : '保存并关闭'}
             </AlertDialogAction>
