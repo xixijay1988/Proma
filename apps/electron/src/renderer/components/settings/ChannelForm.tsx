@@ -910,29 +910,29 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
             <div className="divide-y divide-border/50">
               {enabledModels.map((model) => (
                 <div key={model.id} className="px-4 py-2.5 group">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 size={14} className="text-emerald-500 flex-shrink-0" />
-                    <span className="text-sm text-foreground flex-1">
+                  <div className="flex items-start gap-2">
+                    <CheckCircle2 size={14} className="mt-1.5 text-emerald-500 flex-shrink-0" />
+                    <span className="min-w-0 flex-1 truncate text-sm leading-7 text-foreground">
                       {model.name}
                       {model.name !== model.id && (
                         <span className="text-muted-foreground ml-1">({model.id})</span>
                       )}
                     </span>
+                    <ModelContextWindowField
+                      modelId={model.id}
+                      value={model.contextWindow}
+                      onValidChange={(value) => handleContextWindowChange(model.id, value)}
+                      onValidityChange={handleContextWindowValidityChange}
+                    />
                     <button
                       type="button"
                       onClick={() => handleToggleModel(model.id)}
-                      className="p-0.5 text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100"
+                      className="mt-1 p-0.5 text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100"
                       title="取消启用"
                     >
                       <X size={14} />
                     </button>
                   </div>
-                  <ModelContextWindowField
-                    modelId={model.id}
-                    value={model.contextWindow}
-                    onValidChange={(value) => handleContextWindowChange(model.id, value)}
-                    onValidityChange={handleContextWindowValidityChange}
-                  />
                 </div>
               ))}
             </div>
@@ -1005,29 +1005,29 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
                   className="px-4 py-2.5 group cursor-pointer hover:bg-muted/30 transition-colors"
                   onClick={() => handleToggleModel(model.id)}
                 >
-                  <div className="flex items-center gap-2">
-                    <Plus size={14} className="text-muted-foreground flex-shrink-0" />
-                    <span className="text-sm text-foreground flex-1">
+                  <div className="flex items-start gap-2">
+                    <Plus size={14} className="mt-1.5 text-muted-foreground flex-shrink-0" />
+                    <span className="min-w-0 flex-1 truncate text-sm leading-7 text-foreground">
                       {model.name}
                       {model.name !== model.id && (
                         <span className="text-muted-foreground ml-1">({model.id})</span>
                       )}
                     </span>
+                    <ModelContextWindowField
+                      modelId={model.id}
+                      value={model.contextWindow}
+                      onValidChange={(value) => handleContextWindowChange(model.id, value)}
+                      onValidityChange={handleContextWindowValidityChange}
+                    />
                     <button
                       type="button"
                       onClick={(e) => { e.stopPropagation(); handleRemoveModel(model.id) }}
-                      className="p-0.5 text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100"
+                      className="mt-1 p-0.5 text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100"
                       title="删除"
                     >
                       <X size={14} />
                     </button>
                   </div>
-                  <ModelContextWindowField
-                    modelId={model.id}
-                    value={model.contextWindow}
-                    onValidChange={(value) => handleContextWindowChange(model.id, value)}
-                    onValidityChange={handleContextWindowValidityChange}
-                  />
                 </div>
               ))}
 
