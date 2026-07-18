@@ -46,6 +46,7 @@ import type {
 } from '@proma/shared'
 import { resolveAnthropicMessagesUrl, resolveOpenAIChatCompletionsUrl, resolveOpenAIResponsesUrl } from '@proma/core'
 import { getProviderLogo } from '@/lib/model-logo'
+import { mergeFetchedChannelModels } from '@/lib/channel-model-merge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   AlertDialog,
@@ -457,7 +458,7 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
         setFetchResult(modelsResult)
         if (modelsResult.success && modelsResult.models.length > 0) {
           codexModels = modelsResult.models.map((m) => ({ ...m, enabled: true }))
-          setModels(codexModels)
+          setModels((prev) => mergeFetchedChannelModels(prev, modelsResult.models, { enableAllFetched: true }))
         }
       } catch (modelErr) {
         console.error('[模型配置表单] 拉取 ChatGPT 模型失败:', modelErr)
@@ -516,20 +517,11 @@ export function ChannelForm({ channel, onSaved, onAgentEligibilityChange, onCanc
       // - 既不在新结果里、也不是手动添加的旧模型一律丢弃（清除残留）
       // 拉取失败时保留现有列表，避免 auto-save 持久化空模型列表
       if (!result.success) return
-      const fetchedModels = result.models
-      const fetchedById = new Map(fetchedModels.map((m) => [m.id, m]))
-      setModels((prev) => {
-        const manualKept = prev.filter((m) => m.source === 'manual' && !fetchedById.has(m.id))
-        const merged = fetchedModels.map((m) => {
-          const old = prev.find((p) => p.id === m.id)
-          // ChatGPT (Codex) 是 SDK 内置的少量精选模型，拉取即全部启用，
-          // 与登录自动拉取路径（handleCodexLogin）保持一致，避免新模型（如 gpt-5.6 系列）
-          // 默认未启用而沉到「可用模型」折叠区，被误认为"拉不到"。
-          if (isCodexProvider) return { ...m, enabled: true }
-          return old ? { ...m, enabled: old.enabled } : { ...m, enabled: false }
-        })
-        return [...manualKept, ...merged]
-      })
+      setModels((prev) => mergeFetchedChannelModels(prev, result.models, {
+        // ChatGPT (Codex) 是 SDK 内置的少量精选模型，拉取即全部启用，
+        // 避免新模型（如 gpt-5.6 系列）默认沉到「可用模型」区域。
+        enableAllFetched: isCodexProvider,
+      }))
     } catch (error) {
       setFetchResult({ success: false, message: '拉取模型请求失败', models: [] })
     } finally {
