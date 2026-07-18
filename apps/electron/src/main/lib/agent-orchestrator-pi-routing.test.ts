@@ -3993,4 +3993,94 @@ describe('AgentOrchestrator pi routing', () => {
 
     expect(result.stopShellTaskCalls).toEqual([{ sessionId: 'session-stop-shell-task', taskId: 'shell-123' }])
   })
+
+  test('Given pi coordinator disallowed tools When Pi requests blocked tool Then denies before showing permission prompt', () => {
+    const output = runOrchestratorScript(`
+      import { mock } from 'bun:test'
+
+      mock.module('electron', () => ({
+        app: { isPackaged: true, getPath: () => process.env.HOME },
+        BrowserWindow: { getFocusedWindow: () => null },
+        dialog: {},
+        safeStorage: {
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
+          isEncryptionAvailable: () => false,
+        },
+      }))
+
+      const { AgentOrchestrator } = await import('./agent-orchestrator.ts')
+      const { AgentEventBus } = await import('./agent-event-bus.ts')
+
+      class FakePiAdapter {
+        extensionResult = null
+
+        async *query(input) {
+          this.extensionResult = await input.handleExtensionUiRequest?.({
+            type: 'extension_ui_request',
+            id: 'perm-read-1',
+            method: 'confirm',
+            title: 'Proma Pi 权限确认',
+            message: JSON.stringify({
+              promaPermissionRequest: true,
+              toolName: 'read',
+              toolInput: { path: '/tmp/example.txt' },
+              description: '访问路径: /tmp/example.txt',
+              dangerLevel: 'safe',
+              toolCallId: 'tool-read-1',
+            }),
+          })
+          yield {
+            type: 'result',
+            subtype: 'success',
+            usage: { input_tokens: 0, output_tokens: 0 },
+            session_id: input.sessionId,
+          }
+        }
+
+        abort() {}
+        dispose() {}
+      }
+
+      const adapter = new FakePiAdapter()
+      const eventBus = new AgentEventBus()
+      let permissionRequestCount = 0
+      eventBus.use((_sessionId, payload, next) => {
+        if (payload.kind === 'proma_event' && payload.event.type === 'permission_request') {
+          permissionRequestCount += 1
+        }
+        next()
+      })
+
+      const orchestrator = new AgentOrchestrator(adapter, eventBus, 'pi')
+      await orchestrator.sendMessage({
+        sessionId: 'session-pi-disallowed-tool',
+        userMessage: 'plan only',
+        channelId: 'missing-channel',
+        modelId: 'pi-model',
+        disallowedTools: ['Read', 'Glob', 'Grep', 'Bash', 'Write', 'Edit', 'MultiEdit'],
+      }, {
+        onError: () => {},
+        onComplete: () => {},
+        onTitleUpdated: () => {},
+        onRunStarted: () => {},
+      })
+
+      console.log(JSON.stringify({
+        extensionResult: adapter.extensionResult,
+        permissionRequestCount,
+      }))
+    `)
+
+    const jsonLine = output.split('\n').find((line) => line.startsWith('{') && line.includes('extensionResult'))
+    const result = JSON.parse(jsonLine ?? '{}') as {
+      extensionResult?: { cancelled?: boolean; reason?: string }
+      permissionRequestCount?: number
+    }
+
+    expect(result.extensionResult?.cancelled).toBe(true)
+    expect(result.extensionResult?.reason).toContain('Room 主 Agent')
+    expect(result.permissionRequestCount).toBe(0)
+  })
+
 })

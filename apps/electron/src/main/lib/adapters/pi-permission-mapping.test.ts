@@ -192,6 +192,16 @@ describe('pi permission mapping', () => {
     expect(source).toContain("if (isReadLikeMcpRemoteTool(rawTool, getToolDescription(input))) return { behavior: 'allow', dangerLevel: 'safe' }")
   })
 
+  test('Given permission extension source When generated Then AskUserQuestion is allowed without permission confirmation', () => {
+    const source = buildPiPermissionExtensionSourceForTest({
+      piMode: 'ask',
+      allowedDirectories: ['/tmp/workspace'],
+    })
+
+    expect(source).toContain("const interactionTools = new Set(['askuserquestion'])")
+    expect(source).toContain("if (interactionTools.has(tool)) return { behavior: 'allow', dangerLevel: 'safe' }")
+  })
+
   test('Given permission extension source When generated Then Proma task tools are allowed without confirmation', () => {
     const source = buildPiPermissionExtensionSourceForTest({
       piMode: 'ask',

@@ -102,6 +102,7 @@ function mapToolPermission(toolName, input) {
   const rawTool = String(toolName || '').trim().toLowerCase()
   const readTools = new Set(['glob', 'grep', 'find', 'ls', 'read', 'webfetch', 'websearch'])
   const progressTools = new Set(['taskcreate', 'taskupdate', 'taskget', 'tasklist', 'taskoutput', 'todowrite'])
+  const interactionTools = new Set(['askuserquestion'])
   const writeTools = new Set(['edit', 'multiedit', 'notebookedit', 'write'])
   const shellTools = new Set(['bash', 'shell'])
 
@@ -113,6 +114,7 @@ function mapToolPermission(toolName, input) {
   if (isReadLikeMcpRemoteTool(rawTool, getToolDescription(input))) return { behavior: 'allow', dangerLevel: 'safe' }
   if (readTools.has(tool)) return { behavior: 'allow', dangerLevel: 'safe' }
   if (progressTools.has(tool)) return { behavior: 'allow', dangerLevel: 'safe' }
+  if (interactionTools.has(tool)) return { behavior: 'allow', dangerLevel: 'safe' }
   if (shellTools.has(tool)) return { behavior: 'ask', dangerLevel: 'dangerous' }
   if (writeTools.has(tool)) return { behavior: 'ask', dangerLevel: 'normal' }
   return { behavior: 'ask', dangerLevel: 'normal' }

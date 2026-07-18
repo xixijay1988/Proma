@@ -304,6 +304,10 @@ function formatPiPermissionDisplayName(toolName: string): string {
   return toolName
 }
 
+function normalizeDisallowedToolName(toolName: string): string {
+  return toPromaPiPermissionToolName(toolName).replace(/[\s_-]/g, '').toLowerCase()
+}
+
 function buildPiCapabilityBoundaryPrompt(input: {
   userMessage: string
   workspaceName?: string
@@ -906,6 +910,9 @@ export class AgentOrchestrator {
   /** 运行中会话的当前权限模式（支持运行时动态切换） */
   private sessionPermissionModes = new Map<string, PromaPermissionMode>()
 
+  /** 运行中会话禁用的工具集合（Room 协调者等需要在 Pi 权限桥接层强制拦截） */
+  private sessionDisallowedTools = new Map<string, Set<string>>()
+
   constructor(adapter: AgentProviderAdapter, eventBus: AgentEventBus, engine: AgentEngine = 'claude-sdk') {
     this.adapter = adapter
     this.eventBus = eventBus
@@ -923,6 +930,13 @@ export class AgentOrchestrator {
           if (structuredRequest) {
             const toolName = toPromaPiPermissionToolName(structuredRequest.toolName)
             const displayToolName = formatPiPermissionDisplayName(structuredRequest.toolName)
+            const disallowedTools = this.sessionDisallowedTools.get(sessionId)
+            if (disallowedTools?.has(normalizeDisallowedToolName(toolName))) {
+              return {
+                cancelled: true,
+                reason: `Room 主 Agent 当前仅允许规划、提问和委派，不能直接使用 ${displayToolName} 工具。请用 ::room-handoff 指派合适成员执行。`,
+              }
+            }
             if (permissionService.isSessionWhitelisted(sessionId, toolName, structuredRequest.toolInput)) {
               return { confirmed: true }
             }
@@ -1078,7 +1092,7 @@ export class AgentOrchestrator {
     streamStartedAt: number,
     releaseActiveRun: () => void,
   ): Promise<void> {
-    const { sessionId, userMessage, modelId, workspaceId, additionalDirectories, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds } = input
+    const { sessionId, userMessage, modelId, workspaceId, additionalDirectories, disallowedTools, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds } = input
     const runStartedAt = Date.now()
     const appSettings = getSettings()
     let agentCwd = homedir()
@@ -1114,6 +1128,9 @@ export class AgentOrchestrator {
       ?? sessionMeta?.permissionMode
       ?? PROMA_DEFAULT_PERMISSION_MODE
     this.sessionPermissionModes.set(sessionId, initialPermissionMode)
+    if (disallowedTools && disallowedTools.length > 0) {
+      this.sessionDisallowedTools.set(sessionId, new Set(disallowedTools.map(normalizeDisallowedToolName)))
+    }
 
     const attachedDirectories = collectAttachedDirectories({
       extraDirs: additionalDirectories,
@@ -1351,6 +1368,7 @@ export class AgentOrchestrator {
       this.piExtensionUiAbortControllers.delete(sessionId)
       this.adapter.abort(sessionId)
       this.sessionPermissionModes.delete(sessionId)
+      this.sessionDisallowedTools.delete(sessionId)
       permissionService.clearSessionPending(sessionId)
       exitPlanService.clearSessionPending(sessionId)
     }
@@ -1767,7 +1785,7 @@ export class AgentOrchestrator {
    * 通过 EventBus 分发 AgentEvent，通过 callbacks 发送控制信号。
    */
   async sendMessage(input: AgentSendInput, callbacks: SessionCallbacks): Promise<void> {
-    const { sessionId, userMessage, channelId, modelId, workspaceId, additionalDirectories, customMcpServers, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds } = input
+    const { sessionId, userMessage, channelId, modelId, workspaceId, additionalDirectories, customMcpServers, disallowedTools, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds } = input
     const stderrChunks: string[] = []
 
     // 0. 并发保护
@@ -1794,6 +1812,7 @@ export class AgentOrchestrator {
       if (this.activeSessions.get(sessionId) !== runGeneration) return
       this.activeSessions.delete(sessionId)
       this.sessionPermissionModes.delete(sessionId)
+      this.sessionDisallowedTools.delete(sessionId)
       this.queuedMessageUuids.delete(sessionId)
     }
     const completeRun = (
@@ -2338,6 +2357,7 @@ export class AgentOrchestrator {
         allowDangerouslySkipPermissions: !canUseTool,
         canUseTool,
         ...(initialPermissionMode === 'auto' && { allowedTools: [...SAFE_TOOLS] }),
+        ...(disallowedTools && { disallowedTools }),
         // claude_code preset 提供基础环境信息（platform/shell/OS/git/model/知识截止日期等）
         // buildSystemPrompt 追加 Proma 特有指令（角色定义、SubAgent 策略、工作区信息等）
         systemPrompt: {

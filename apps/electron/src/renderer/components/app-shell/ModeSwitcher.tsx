@@ -9,18 +9,19 @@
  */
 
 import * as React from 'react'
-import { useAtom, useAtomValue } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { appModeAtom, type AppMode } from '@/atoms/app-mode'
 import { conversationsAtom, currentConversationIdAtom } from '@/atoms/chat-atoms'
 import { agentSessionsAtom, currentAgentSessionIdAtom } from '@/atoms/agent-atoms'
+import { roomsAtom, currentRoomIdAtom, loadRoomsAtom } from '@/atoms/room-atoms'
 import { tabsAtom } from '@/atoms/tab-atoms'
 import { useOpenSession } from '@/hooks/useOpenSession'
-import { Bot, MessageSquare } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-const modes: { value: AppMode; label: string; icon: React.ReactNode }[] = [
-  { value: 'agent', label: 'Agent', icon: <Bot size={15} /> },
-  { value: 'chat', label: 'Chat', icon: <MessageSquare size={15} /> },
+const modes: { value: AppMode; label: string }[] = [
+  { value: 'agent', label: 'Agent' },
+  { value: 'room', label: 'Room' },
+  { value: 'chat', label: 'Chat' },
 ]
 
 export function ModeSwitcher(): React.ReactElement {
@@ -28,12 +29,36 @@ export function ModeSwitcher(): React.ReactElement {
   const openSession = useOpenSession()
   const conversations = useAtomValue(conversationsAtom)
   const agentSessions = useAtomValue(agentSessionsAtom)
+  const rooms = useAtomValue(roomsAtom)
   const currentConversationId = useAtomValue(currentConversationIdAtom)
   const currentAgentSessionId = useAtomValue(currentAgentSessionIdAtom)
+  const currentRoomId = useAtomValue(currentRoomIdAtom)
+  const loadRooms = useSetAtom(loadRoomsAtom)
   const tabs = useAtomValue(tabsAtom)
 
   /** 尝试恢复目标模式下的上一个对话/会话，按优先级 fallback */
   const restoreSession = React.useCallback((targetMode: AppMode) => {
+    if (targetMode === 'room') {
+      const lastRoom = currentRoomId ? rooms.find((room) => room.id === currentRoomId) : undefined
+      if (lastRoom) {
+        openSession('room', lastRoom.id, lastRoom.title)
+        return
+      }
+      const roomTab = tabs.find((t) => t.type === 'room')
+      if (roomTab) {
+        openSession('room', roomTab.sessionId, roomTab.title)
+        return
+      }
+      const recentRoom = rooms.find((room) => !room.archived)
+      if (recentRoom) {
+        openSession('room', recentRoom.id, recentRoom.title)
+        return
+      }
+      setMode('room')
+      void loadRooms()
+      return
+    }
+
     const isChatMode = targetMode === 'chat'
     const sessions = isChatMode ? conversations : agentSessions
     const lastId = isChatMode ? currentConversationId : currentAgentSessionId
@@ -60,7 +85,7 @@ export function ModeSwitcher(): React.ReactElement {
     }
     // 4. 无任何对话，仅切换模式
     setMode(targetMode)
-  }, [openSession, conversations, agentSessions, currentConversationId, currentAgentSessionId, tabs, setMode])
+  }, [openSession, conversations, agentSessions, rooms, currentConversationId, currentAgentSessionId, currentRoomId, tabs, setMode, loadRooms])
 
   const handleModeSwitch = React.useCallback((targetMode: AppMode) => {
     if (targetMode === mode) return
@@ -69,27 +94,26 @@ export function ModeSwitcher(): React.ReactElement {
 
   return (
     <div className="pt-2 titlebar-drag-region select-none">
-      <div className="relative flex rounded-xl bg-muted p-1 titlebar-drag-region">
+      <div className="relative flex overflow-hidden rounded-xl bg-muted p-1 titlebar-drag-region">
         {/* 滑动背景指示器 */}
         <div
           className={cn(
-            'mode-slider pointer-events-none absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-lg bg-background shadow-sm transition-transform duration-300 ease-in-out',
-            mode === 'agent' ? 'translate-x-0' : 'translate-x-full'
+            'mode-slider pointer-events-none absolute top-1 bottom-1 w-[calc(33.333%-4px)] rounded-lg bg-background shadow-sm transition-transform duration-300 ease-in-out',
+            mode === 'agent' ? 'translate-x-0' : mode === 'room' ? 'translate-x-full' : 'translate-x-[200%]'
           )}
         />
-        {modes.map(({ value, label, icon }) => (
+        {modes.map(({ value, label }) => (
           <button
             key={value}
             type="button"
             onClick={() => handleModeSwitch(value)}
             className={cn(
-              'mode-btn titlebar-no-drag relative z-[1] h-8 flex-1 flex items-center justify-center gap-1.5 rounded-lg px-3 py-0 text-sm font-medium transition-colors duration-200 select-none',
+              'mode-btn titlebar-no-drag relative z-[1] h-8 min-w-0 flex-1 flex items-center justify-center gap-1.5 rounded-lg px-2 py-0 text-sm font-medium transition-colors duration-200 select-none',
               mode === value
                 ? 'mode-btn-selected text-foreground'
                 : 'text-muted-foreground hover:text-foreground'
             )}
           >
-            {icon}
             {label}
           </button>
         ))}

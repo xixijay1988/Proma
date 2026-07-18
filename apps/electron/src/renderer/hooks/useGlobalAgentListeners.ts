@@ -570,7 +570,7 @@ export function useGlobalAgentListeners(): void {
         unstable_batchedUpdates(() => {
         const { sessionId, payload } = streamEvent
 
-        if (payload.kind === 'proma_event' && payload.event.type === 'external_run_started') {
+        if (payload.kind === 'proma_event' && payload.event.type === 'external_run_started' && payload.event.source !== 'room') {
           activateExternalAgentRun(payload.event)
         }
 

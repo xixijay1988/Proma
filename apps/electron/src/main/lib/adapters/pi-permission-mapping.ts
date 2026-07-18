@@ -35,6 +35,10 @@ const PROGRESS_TOOLS = new Set([
   'todowrite',
 ])
 
+const INTERACTION_TOOLS = new Set([
+  'askuserquestion',
+])
+
 const WRITE_TOOLS = new Set([
   'edit',
   'multiedit',
@@ -107,7 +111,7 @@ export function mapPiToolPermission(input: PiPermissionInput): PiPermissionDecis
     return { behavior: 'allow' }
   }
 
-  if (PROGRESS_TOOLS.has(toolName)) {
+  if (PROGRESS_TOOLS.has(toolName) || INTERACTION_TOOLS.has(toolName)) {
     return { behavior: 'allow' }
   }
 

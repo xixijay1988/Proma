@@ -9,7 +9,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { MessageSquare, Bot } from 'lucide-react'
+import { MessageSquare, Bot, UsersRound, StickyNote } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
   tabsAtom,
@@ -117,6 +117,10 @@ export function TabSwitcher(): React.ReactElement | null {
             .updateSettings({ agentWorkspaceId: session.workspaceId })
             .catch(console.error)
         }
+      } else if (tab.type === 'room') {
+        setAppMode('room')
+        setCurrentConversationId(null)
+        setCurrentAgentSessionId(null)
       }
     },
     [
@@ -258,6 +262,10 @@ export function TabSwitcher(): React.ReactElement | null {
                 )}
                 {tab.type === 'agent' ? (
                   <Bot className="w-4 h-4 shrink-0 opacity-60" />
+                ) : tab.type === 'room' ? (
+                  <UsersRound className="w-4 h-4 shrink-0 opacity-60" />
+                ) : tab.type === 'scratch' ? (
+                  <StickyNote className="w-4 h-4 shrink-0 opacity-60" />
                 ) : (
                   <MessageSquare className="w-4 h-4 shrink-0 opacity-60" />
                 )}

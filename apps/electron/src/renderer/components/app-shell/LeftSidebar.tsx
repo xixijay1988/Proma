@@ -11,7 +11,7 @@
 import * as React from 'react'
 import { useAtom, useSetAtom, useAtomValue, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Pin, PinOff, Settings, Plus, Trash2, Pencil, ChevronDown, ChevronRight, Plug, Zap, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Hammer, Bot, MessageSquare, MoreHorizontal } from 'lucide-react'
+import { Pin, PinOff, Settings, Plus, Trash2, Pencil, ChevronDown, ChevronRight, Plug, Zap, PanelLeftClose, PanelLeftOpen, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Hammer, Bot, MessageSquare, MoreHorizontal, UsersRound, Hash } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { ModeSwitcher } from './ModeSwitcher'
@@ -59,6 +59,16 @@ import {
   closeTab,
   updateTabTitle,
 } from '@/atoms/tab-atoms'
+import {
+  roomsAtom,
+  currentRoomIdAtom,
+  currentRoomChannelIdAtom,
+  currentRoomChannelsAtom,
+  createRoomChannelAtom,
+  deleteRoomChannelAtom,
+  loadRoomsAtom,
+  selectRoomChannelAtom,
+} from '@/atoms/room-atoms'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { sidebarViewModeAtom, agentSidebarTopHeightAtom } from '@/atoms/sidebar-atoms'
 import { searchDialogOpenAtom } from '@/atoms/search-atoms'
@@ -98,7 +108,9 @@ import {
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 import type { ActiveView } from '@/atoms/active-view'
-import type { ConversationMeta, AgentSessionMeta, WorkspaceCapabilities } from '@proma/shared'
+import { DEFAULT_ROOM_CHANNEL_ID } from '@proma/shared'
+import type { ConversationMeta, AgentSessionMeta, RoomChannel, WorkspaceCapabilities } from '@proma/shared'
+import { canDeleteRoomChannel } from '@/components/room/room-view-model'
 
 interface SidebarItemProps {
   icon: React.ReactNode
@@ -226,10 +238,21 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
   const [pinnedExpanded, setPinnedExpanded] = React.useState(true)
   /** Agent 上区子 Tab：'working' | 'pinned'，默认 working 在前 */
   const [agentSubTab, setAgentSubTab] = React.useState<'working' | 'pinned'>('working')
+  const [roomChannelCreating, setRoomChannelCreating] = React.useState(false)
+  const [roomChannelName, setRoomChannelName] = React.useState('')
+  const [roomChannelToDelete, setRoomChannelToDelete] = React.useState<RoomChannel | null>(null)
   const [userProfile, setUserProfile] = useAtom(userProfileAtom)
   const selectedModel = useAtomValue(selectedModelAtom)
   const streamingIds = useAtomValue(streamingConversationIdsAtom)
   const mode = useAtomValue(appModeAtom)
+  const rooms = useAtomValue(roomsAtom)
+  const currentRoomId = useAtomValue(currentRoomIdAtom)
+  const currentRoomChannelId = useAtomValue(currentRoomChannelIdAtom)
+  const roomChannels = useAtomValue(currentRoomChannelsAtom)
+  const selectRoomChannel = useSetAtom(selectRoomChannelAtom)
+  const createRoomChannel = useSetAtom(createRoomChannelAtom)
+  const deleteRoomChannel = useSetAtom(deleteRoomChannelAtom)
+  const loadRooms = useSetAtom(loadRoomsAtom)
   const isMac = React.useMemo(() => detectIsMac(), [])
   const hasUpdate = useAtomValue(hasUpdateAtom)
   const hasEnvironmentIssues = useAtomValue(hasEnvironmentIssuesAtom)
@@ -890,6 +913,23 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     setViewMode('active')
     if (targetMode === mode) return
 
+    if (targetMode === 'room') {
+      const currentRoom = currentRoomId ? rooms.find((room) => room.id === currentRoomId) : undefined
+      const room = currentRoom ?? rooms.find((item) => !item.archived) ?? rooms[0]
+      if (room) {
+        openSession('room', room.id, room.title)
+        return
+      }
+      const roomTab = tabs.find((t) => t.type === 'room')
+      if (roomTab) {
+        openSession('room', roomTab.sessionId, roomTab.title)
+        return
+      }
+      setMode('room')
+      void loadRooms()
+      return
+    }
+
     const isChatMode = targetMode === 'chat'
     const sessions = isChatMode ? conversations : agentSessions
     const lastId = isChatMode ? currentConversationId : currentAgentSessionId
@@ -919,14 +959,53 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     mode,
     conversations,
     agentSessions,
+    rooms,
     currentConversationId,
     currentAgentSessionId,
+    currentRoomId,
     tabs,
     draftSessionIds,
     openSession,
     setMode,
     setViewMode,
+    loadRooms,
   ])
+
+  const handleOpenRoom = React.useCallback((): void => {
+    const room = (currentRoomId ? rooms.find((item) => item.id === currentRoomId) : undefined)
+      ?? rooms.find((item) => !item.archived)
+      ?? rooms[0]
+    if (room) {
+      openSession('room', room.id, room.title)
+      return
+    }
+    setMode('room')
+    void loadRooms()
+  }, [currentRoomId, rooms, openSession, setMode, loadRooms])
+
+  const handleSelectRoomChannel = React.useCallback((channelId: string): void => {
+    const room = (currentRoomId ? rooms.find((item) => item.id === currentRoomId) : undefined)
+      ?? rooms.find((item) => !item.archived)
+      ?? rooms[0]
+    if (room) {
+      openSession('room', room.id, room.title)
+      void selectRoomChannel(channelId)
+    }
+  }, [currentRoomId, rooms, openSession, selectRoomChannel])
+
+  const handleCreateRoomChannel = React.useCallback((): void => {
+    const trimmed = roomChannelName.trim()
+    if (!trimmed) return
+    void createRoomChannel(trimmed)
+    setRoomChannelName('')
+    setRoomChannelCreating(false)
+  }, [createRoomChannel, roomChannelName])
+
+  const handleConfirmDeleteRoomChannel = React.useCallback((): void => {
+    if (!roomChannelToDelete) return
+    void deleteRoomChannel(roomChannelToDelete.id)
+    setRoomChannelToDelete(null)
+  }, [deleteRoomChannel, roomChannelToDelete])
 
   const railRecentItems = React.useMemo(() => {
     if (mode === 'chat') {
@@ -1031,6 +1110,31 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
     </AlertDialog>
   )
 
+  const roomChannelDeleteDialog = (
+    <AlertDialog
+      open={roomChannelToDelete !== null}
+      onOpenChange={(open) => { if (!open) setRoomChannelToDelete(null) }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>确认删除频道</AlertDialogTitle>
+          <AlertDialogDescription>
+            删除后会隐藏「{roomChannelToDelete?.name ?? ''}」频道，频道内历史消息不会在左侧频道列表中继续显示。确定要删除吗？
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>取消</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={handleConfirmDeleteRoomChannel}
+            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+          >
+            删除频道
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+
   // 迁移会话对话框（collapsed/expanded 共享）
   const moveDialog = (
     <MoveSessionDialog
@@ -1112,6 +1216,25 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
             </TooltipTrigger>
             <TooltipContent side="right">Chat 模式</TooltipContent>
           </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="切换到 Room 模式"
+                onClick={() => handleRailModeSwitch('room')}
+                className={cn(
+                  'relative size-10 flex items-center justify-center rounded-[12px] transition-colors titlebar-no-drag',
+                  mode === 'room'
+                    ? 'bg-primary/10 text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
+                    : 'text-foreground/45 hover:bg-foreground/[0.06] hover:text-foreground/75'
+                )}
+              >
+                <UsersRound size={17} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">Room 模式</TooltipContent>
+          </Tooltip>
         </div>
 
         <div className="my-3 h-px w-8 bg-border/70" />
@@ -1122,15 +1245,15 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
             <TooltipTrigger asChild>
               <button
                 type="button"
-                aria-label={mode === 'agent' ? '新建 Agent 会话' : '新建 Chat 对话'}
-                onClick={mode === 'agent' ? handleNewAgentSession : handleNewConversation}
+                aria-label={mode === 'agent' ? '新建 Agent 会话' : mode === 'room' ? '打开 Room' : '新建 Chat 对话'}
+                onClick={mode === 'agent' ? handleNewAgentSession : mode === 'room' ? handleOpenRoom : handleNewConversation}
                 className="size-10 flex items-center justify-center rounded-[12px] text-foreground/70 bg-primary/5 hover:bg-primary/10 transition-colors titlebar-no-drag border border-dashed border-[hsl(var(--dashed-border))] hover:border-[hsl(var(--dashed-border-hover))]"
               >
                 <Plus size={16} />
               </button>
             </TooltipTrigger>
             <TooltipContent side="right">
-              {mode === 'agent' ? '新会话' : '新对话'}
+              {mode === 'agent' ? '新会话' : mode === 'room' ? '打开 Room' : '新对话'}
             </TooltipContent>
           </Tooltip>
 
@@ -1212,6 +1335,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
         </div>
 
         {deleteDialog}
+        {roomChannelDeleteDialog}
         {moveDialog}
         <SearchDialog />
       </div>
@@ -1259,11 +1383,11 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       {/* 新对话/新会话按钮 + 搜索按钮 */}
       <div className="px-3 pt-2 flex items-center gap-1.5">
         <button
-          onClick={mode === 'agent' ? handleNewAgentSession : handleNewConversation}
+          onClick={mode === 'agent' ? handleNewAgentSession : mode === 'room' ? handleOpenRoom : handleNewConversation}
           className="flex-1 flex items-center gap-2 px-3 py-2 rounded-[10px] text-[13px] font-medium text-foreground/70 bg-primary/5 hover:bg-primary/10 transition-colors duration-100 titlebar-no-drag border border-dashed border-[hsl(var(--dashed-border))] hover:border-[hsl(var(--dashed-border-hover))]"
         >
           <Plus size={14} />
-          <span>{mode === 'agent' ? '新会话' : '新对话'}</span>
+          <span>{mode === 'agent' ? '新会话' : mode === 'room' ? '打开 Room' : '新对话'}</span>
         </button>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -1507,7 +1631,118 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
 
           {/* Chat 模式 / 归档视图：单列表布局 */}
           <div className="flex-1 overflow-y-auto px-3 pt-2 pb-3 scrollbar-none">
-            {mode === 'chat' ? (
+            {mode === 'room' ? (
+              <div className="space-y-4">
+                <div>
+                  <div className="px-3 pt-2 pb-1 text-[11px] font-medium text-foreground/40 select-none">
+                    Rooms
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    {rooms.filter((room) => !room.archived).map((room) => (
+                      <button
+                        key={room.id}
+                        type="button"
+                        className={cn(
+                          'w-full flex items-center gap-2 px-3 py-2 rounded-[10px] text-[13px] transition-colors titlebar-no-drag text-left',
+                          room.id === currentRoomId
+                            ? 'bg-primary/10 text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
+                            : 'text-foreground/60 hover:bg-primary/5 hover:text-foreground',
+                        )}
+                        onClick={() => openSession('room', room.id, room.title)}
+                      >
+                        <UsersRound size={14} className="shrink-0 text-foreground/45" />
+                        <span className="min-w-0 flex-1 truncate">{room.title}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between px-3 pt-1 pb-1">
+                    <div className="text-[11px] font-medium text-foreground/40 select-none">频道</div>
+                    <button
+                      type="button"
+                      className="flex size-6 items-center justify-center rounded-md text-foreground/35 hover:bg-primary/5 hover:text-foreground/60 titlebar-no-drag"
+                      onClick={() => setRoomChannelCreating(true)}
+                      aria-label="新建频道"
+                    >
+                      <Plus size={13} />
+                    </button>
+                  </div>
+
+                  <div className="flex flex-col gap-0.5">
+                    {roomChannels.filter((channel) => !channel.archived).map((channel) => (
+                      <div
+                        key={channel.id}
+                        className={cn(
+                          'group flex w-full items-center rounded-[10px] text-[13px] transition-colors titlebar-no-drag',
+                          channel.id === currentRoomChannelId
+                            ? 'bg-primary/10 text-foreground shadow-[0_1px_2px_0_rgba(0,0,0,0.05)]'
+                            : 'text-foreground/60 hover:bg-primary/5 hover:text-foreground',
+                        )}
+                      >
+                        <button
+                          type="button"
+                          className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left"
+                          onClick={() => handleSelectRoomChannel(channel.id)}
+                        >
+                          <Hash size={14} className="shrink-0 text-foreground/45" />
+                          <span className="min-w-0 flex-1 truncate">{channel.name}</span>
+                          {channel.id === DEFAULT_ROOM_CHANNEL_ID && (
+                            <span className="shrink-0 text-[10px] text-foreground/35">默认</span>
+                          )}
+                        </button>
+                        {canDeleteRoomChannel(channel) && (
+                          <button
+                            type="button"
+                            aria-label={`删除频道 ${channel.name}`}
+                            className="mr-1 flex size-7 shrink-0 items-center justify-center rounded-md text-foreground/30 opacity-0 transition hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100 focus:opacity-100"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              setRoomChannelToDelete(channel)
+                            }}
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  {roomChannelCreating && (
+                    <div className="mt-2 rounded-2xl bg-muted/40 p-2">
+                      <input
+                        value={roomChannelName}
+                        onChange={(event) => setRoomChannelName(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') handleCreateRoomChannel()
+                          if (event.key === 'Escape') setRoomChannelCreating(false)
+                        }}
+                        autoFocus
+                        placeholder="frontend"
+                        className="h-8 w-full rounded-lg bg-background px-2 text-xs outline-none ring-1 ring-border/50 focus:ring-primary/40"
+                      />
+                      <div className="mt-2 flex justify-end gap-1">
+                        <button
+                          type="button"
+                          className="rounded-md px-2 py-1 text-[11px] text-foreground/45 hover:bg-background"
+                          onClick={() => setRoomChannelCreating(false)}
+                        >
+                          取消
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-md bg-primary px-2 py-1 text-[11px] text-primary-foreground"
+                          onClick={handleCreateRoomChannel}
+                        >
+                          创建
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : mode === 'chat' ? (
               /* Chat 模式：对话按日期分组 */
               conversationGroups.map((group) => (
                 <div key={group.label} className="mb-1">
@@ -1646,6 +1881,7 @@ export function LeftSidebar({ width }: LeftSidebarProps): React.ReactElement {
       </div>
 
       {deleteDialog}
+      {roomChannelDeleteDialog}
       {moveDialog}
       <SearchDialog />
     </div>

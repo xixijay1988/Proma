@@ -54,6 +54,13 @@ export function useSyncActiveTabSideEffects(): SyncActiveTabSideEffects {
         return
       }
 
+      if (newActiveTab.type === 'room') {
+        setAppMode('room')
+        setCurrentConversationId(null)
+        setCurrentAgentSessionId(null)
+        return
+      }
+
       // Agent
       setAppMode('agent')
       setCurrentAgentSessionId(newActiveTab.sessionId)

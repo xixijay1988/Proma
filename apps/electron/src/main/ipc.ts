@@ -4,12 +4,12 @@
  * 负责注册主进程和渲染进程之间的通信处理器
  */
 
-import { ipcMain, nativeTheme, shell, dialog, BrowserWindow, app } from 'electron'
+import { ipcMain, nativeTheme, shell, dialog, BrowserWindow, app, type WebContents } from 'electron'
 import { join, resolve, sep, dirname } from 'node:path'
 import { existsSync, realpathSync, rmSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, isPromaPermissionMode } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ROOM_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, isProviderCompatibleWithAgentEngine, isPromaPermissionMode } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, QUICK_TASK_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   QuickTaskSubmitInput,
@@ -126,6 +126,21 @@ import type {
   RevertFileInput,
   FileAccessOptions,
   ResolvedFileUrl,
+  AgentStreamPayload,
+  RoomChannel,
+  RoomChannelCreateInput,
+  RoomChannelUpdateInput,
+  RoomCreateInput,
+  RoomDraft,
+  RoomMemberConfig,
+  RoomMemberSaveInput,
+  RoomMessage,
+  RoomMeta,
+  RoomProgressItem,
+  RoomSendMessageInput,
+  RoomStreamEvent,
+  RoomUpdateDraftInput,
+  RoomUpdateInput,
 } from '@proma/shared'
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
@@ -138,6 +153,7 @@ import {
   updateChannel,
   deleteChannel,
   decryptApiKey,
+  getChannelById,
   testChannel,
   testChannelDirect,
   fetchModels,
@@ -193,7 +209,7 @@ import {
   searchAgentSessionReferences,
   getAgentTaskOutput,
 } from './lib/agent-session-manager'
-import { runAgent, stopAgent, stopAgentTask, abortAgentRuntimeRetry, updateAgentRuntimeAutoControls, updateAgentRuntimeQueueModes, updateAgentRuntimeThinkingLevel, updateAgentRuntimeModel, renameAgentSessionTitle, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, forkAgentSession, cloneActiveAgentSession, switchActiveAgentSession, setPiSessionFileForNextRun, syncPiNativeSessionMessages, applyPiGitCheckpointForSession, getAgentRuntimeState } from './lib/agent-service'
+import { agentEventBus, runAgent, runAgentHeadless, stopAgent, stopAgentTask, abortAgentRuntimeRetry, updateAgentRuntimeAutoControls, updateAgentRuntimeQueueModes, updateAgentRuntimeThinkingLevel, updateAgentRuntimeModel, renameAgentSessionTitle, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, queueAgentMessage, updateAgentPermissionMode, rewindAgentSession, forkAgentSession, cloneActiveAgentSession, switchActiveAgentSession, setPiSessionFileForNextRun, syncPiNativeSessionMessages, applyPiGitCheckpointForSession, getAgentRuntimeState } from './lib/agent-service'
 import { assertAgentSessionForkSupported } from './lib/agent-session-capabilities'
 import { permissionService } from './lib/agent-permission-service'
 import { askUserService } from './lib/agent-ask-user-service'
@@ -266,9 +282,234 @@ import { getDingTalkConfig, saveDingTalkConfig, getDecryptedClientSecret, getDin
 import { dingtalkBridgeManager } from './lib/dingtalk-bridge-manager'
 import { getWeChatConfig } from './lib/wechat-config'
 import { wechatBridge } from './lib/wechat-bridge'
+import {
+  createRoomChannel,
+  createRoom,
+  deleteRoomChannel,
+  deleteRoom,
+  deleteRoomMember,
+  ensureDefaultRoom,
+  getRoomMessages,
+  listRoomChannels,
+  listRoomDrafts,
+  listRoomMembers,
+  listRooms,
+  saveRoomMember,
+  updateRoomChannel,
+  updateRoom,
+} from './lib/room-manager'
+import { buildRoomAgentCompletionContent, buildRoomProgressItemsFromSdkMessages, createAgentInputFromRoomRunPlan, ensureAgentSessionForRoomRunPlan, getAgentSessionIdForRoomRunPlan, replaceRoomMessageContent, routeRoomAgentMentions, sendRoomMessage, updateRoomDraft } from './lib/room-orchestrator'
+import type { RoomAgentRunPlan } from './lib/room-orchestrator'
+import { RoomAgentRunQueue } from './lib/room-agent-run-queue'
 
 /** 文件浏览器中需要隐藏的系统文件 */
 const HIDDEN_FS_ENTRIES = new Set(['.DS_Store', 'Thumbs.db'])
+const roomAgentRunQueue = new RoomAgentRunQueue()
+
+function sendRoomRuntimeEvent(webContents: WebContents, event: RoomStreamEvent): void {
+  if (webContents.isDestroyed()) return
+  webContents.send(ROOM_IPC_CHANNELS.STREAM_EVENT, event)
+}
+
+function createRoomProgressItem(kind: RoomProgressItem['kind'], content: string): RoomProgressItem {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    kind,
+    content,
+    createdAt: Date.now(),
+  }
+}
+
+function truncateRoomProgress(content: string, maxLength = 180): string {
+  const trimmed = content.trim()
+  if (trimmed.length <= maxLength) return trimmed
+  return `${trimmed.slice(0, maxLength)}…`
+}
+
+function getRoomProgressItemsFromPromaEvent(event: Extract<AgentStreamPayload, { kind: 'proma_event' }>['event']): RoomProgressItem[] {
+  if (event.type === 'retry') {
+    if (event.status === 'starting') {
+      return [createRoomProgressItem('retry', `请求中断，准备重试：${event.reason ?? '未知原因'}`)]
+    }
+    if (event.status === 'attempt' && event.attemptData) {
+      return [createRoomProgressItem('retry', `第 ${event.attemptData.attempt} 次重试中...`)]
+    }
+    if (event.status === 'cleared') {
+      return [createRoomProgressItem('retry', '重试成功，继续运行')]
+    }
+    if (event.status === 'failed') {
+      return [createRoomProgressItem('error', '重试失败')]
+    }
+  }
+  if (event.type === 'compaction' && event.status === 'starting') {
+    return [createRoomProgressItem('status', '正在压缩上下文...')]
+  }
+  if (event.type === 'permission_request') {
+    return [createRoomProgressItem('status', '等待工具权限确认...')]
+  }
+  if (event.type === 'ask_user_request') {
+    return [createRoomProgressItem('status', '等待用户补充信息...')]
+  }
+  return []
+}
+
+function subscribeRoomAgentProgress(plan: RoomAgentRunPlan, sessionId: string, webContents: WebContents): () => void {
+  const sdkMessages: SDKMessage[] = []
+  let emittedSdkProgressCount = 0
+
+  return agentEventBus.on((eventSessionId, payload) => {
+    if (eventSessionId !== sessionId) return
+
+    const items = payload.kind === 'sdk_message'
+      ? (() => {
+          sdkMessages.push(payload.message)
+          const progressItems = buildRoomProgressItemsFromSdkMessages(sdkMessages)
+          const newItems = progressItems.slice(emittedSdkProgressCount)
+          emittedSdkProgressCount = progressItems.length
+          return newItems
+        })()
+      : getRoomProgressItemsFromPromaEvent(payload.event)
+
+    for (const item of items) {
+      sendRoomRuntimeEvent(webContents, {
+        type: 'agent_progress',
+        roomId: plan.roomId,
+        roomChannelId: plan.roomChannelId,
+        messageId: plan.outputMessageId,
+        memberId: plan.memberId,
+        sessionId,
+        item,
+      })
+    }
+  })
+}
+
+function failRoomAgentPlan(plan: RoomAgentRunPlan, webContents: WebContents, sessionId: string, error: string): void {
+  replaceRoomMessageContent(plan.roomId, plan.outputMessageId, `运行失败：${error}`, 'error', error)
+  sendRoomRuntimeEvent(webContents, {
+    type: 'agent_error',
+    roomId: plan.roomId,
+    roomChannelId: plan.roomChannelId,
+    messageId: plan.outputMessageId,
+    memberId: plan.memberId,
+    sessionId,
+    error,
+  })
+}
+
+async function runRoomAgentPlan(plan: RoomAgentRunPlan, webContents: WebContents): Promise<void> {
+  const session = ensureAgentSessionForRoomRunPlan(plan)
+  const agentInput = createAgentInputFromRoomRunPlan(plan)
+  let runError: string | null = null
+  const messageStartIndex = getAgentSessionSDKMessages(session.id).length
+  sendRoomRuntimeEvent(webContents, {
+    type: 'agent_started',
+    roomId: plan.roomId,
+    roomChannelId: plan.roomChannelId,
+    messageId: plan.outputMessageId,
+    memberId: plan.memberId,
+    sessionId: session.id,
+  })
+
+  const channel = getChannelById(agentInput.channelId)
+  const engine = session.agentEngine ?? 'claude-sdk'
+  console.log('[Room] 启动成员 Agent:', {
+    roomId: plan.roomId,
+    memberId: plan.memberId,
+    sessionId: session.id,
+    channelId: agentInput.channelId,
+    provider: channel?.provider,
+    workspaceId: agentInput.workspaceId,
+    engine,
+  })
+  if (!channel) {
+    failRoomAgentPlan(plan, webContents, session.id, '成员绑定的渠道不存在，请重新选择渠道。')
+    return
+  }
+  if (!isProviderCompatibleWithAgentEngine(engine, channel.provider)) {
+    failRoomAgentPlan(plan, webContents, session.id, `当前工作区引擎 ${engine} 不兼容渠道 ${channel.provider}，请切换成员工作区引擎或渠道。`)
+    return
+  }
+
+  const unsubscribeProgress = subscribeRoomAgentProgress(plan, session.id, webContents)
+  try {
+    await runAgentHeadless(agentInput, {
+      source: 'room',
+      onError: (error) => { runError = error },
+      onComplete: () => {},
+      onTitleUpdated: () => {},
+    })
+
+    if (runError) {
+      failRoomAgentPlan(plan, webContents, session.id, runError)
+      return
+    }
+
+    const completion = buildRoomAgentCompletionContent(getAgentSessionSDKMessages(session.id), messageStartIndex, plan.memberName)
+    replaceRoomMessageContent(plan.roomId, plan.outputMessageId, completion.content, completion.status, completion.error)
+    if (completion.status === 'error') {
+      sendRoomRuntimeEvent(webContents, {
+        type: 'agent_error',
+        roomId: plan.roomId,
+        roomChannelId: plan.roomChannelId,
+        messageId: plan.outputMessageId,
+        memberId: plan.memberId,
+        sessionId: session.id,
+        error: completion.error ?? completion.content,
+      })
+      return
+    }
+    const chained = routeRoomAgentMentions({
+      roomId: plan.roomId,
+      roomChannelId: plan.roomChannelId,
+      sourceMessageId: plan.outputMessageId,
+      excludeMemberId: plan.memberId,
+    })
+    sendRoomRuntimeEvent(webContents, {
+      type: 'agent_completed',
+      roomId: plan.roomId,
+      roomChannelId: plan.roomChannelId,
+      messageId: plan.outputMessageId,
+      memberId: plan.memberId,
+      sessionId: session.id,
+      content: completion.content,
+    })
+    for (const message of chained.routedMessages) {
+      sendRoomRuntimeEvent(webContents, {
+        type: 'message_added',
+        roomId: plan.roomId,
+        message,
+      })
+    }
+    for (const chainedPlan of chained.runPlans) {
+      enqueueRoomAgentPlan(chainedPlan, webContents, '链式')
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    failRoomAgentPlan(plan, webContents, session.id, message)
+  } finally {
+    unsubscribeProgress()
+  }
+}
+
+function enqueueRoomAgentPlan(plan: RoomAgentRunPlan, webContents: WebContents, source: string): void {
+  if (!plan.channelId) return
+  const sessionId = getAgentSessionIdForRoomRunPlan(plan)
+  if (roomAgentRunQueue.wouldQueue(sessionId)) {
+    sendRoomRuntimeEvent(webContents, {
+      type: 'agent_progress',
+      roomId: plan.roomId,
+      roomChannelId: plan.roomChannelId,
+      messageId: plan.outputMessageId,
+      memberId: plan.memberId,
+      sessionId,
+      item: createRoomProgressItem('status', '已排队，等待该成员上一条任务完成...'),
+    })
+  }
+  roomAgentRunQueue.enqueue(sessionId, () => runRoomAgentPlan(plan, webContents)).catch((error) => {
+    console.error(`[Room] ${source} Agent 运行失败:`, error)
+  })
+}
 
 /** 已知编辑器应用名称白名单（macOS） */
 const KNOWN_EDITORS = [
@@ -1608,6 +1849,122 @@ export function registerIpcHandlers(): void {
     PROXY_IPC_CHANNELS.DETECT_SYSTEM,
     async (): Promise<SystemProxyDetectResult> => {
       return detectSystemProxy()
+    }
+  )
+
+  // ===== Room 管理相关 =====
+
+  ipcMain.handle(
+    ROOM_IPC_CHANNELS.LIST_ROOMS,
+    async (): Promise<RoomMeta[]> => {
+      const rooms = listRooms()
+      return rooms.length > 0 ? rooms : [ensureDefaultRoom()]
+    }
+  )
+
+  ipcMain.handle(
+    ROOM_IPC_CHANNELS.CREATE_ROOM,
+    async (_, input?: RoomCreateInput): Promise<RoomMeta> => {
+      return createRoom(input ?? {})
+    }
+  )
+
+  ipcMain.handle(
+    ROOM_IPC_CHANNELS.UPDATE_ROOM,
+    async (_, id: string, updates: RoomUpdateInput): Promise<RoomMeta> => {
+      return updateRoom(id, updates)
+    }
+  )
+
+  ipcMain.handle(
+    ROOM_IPC_CHANNELS.DELETE_ROOM,
+    async (_, id: string): Promise<void> => {
+      deleteRoom(id)
+    }
+  )
+
+  ipcMain.handle(
+    ROOM_IPC_CHANNELS.LIST_CHANNELS,
+    async (_, roomId: string): Promise<RoomChannel[]> => {
+      return listRoomChannels(roomId)
+    }
+  )
+
+  ipcMain.handle(
+    ROOM_IPC_CHANNELS.CREATE_CHANNEL,
+    async (_, input: RoomChannelCreateInput): Promise<RoomChannel> => {
+      return createRoomChannel(input)
+    }
+  )
+
+  ipcMain.handle(
+    ROOM_IPC_CHANNELS.UPDATE_CHANNEL,
+    async (_, roomId: string, channelId: string, updates: RoomChannelUpdateInput): Promise<RoomChannel> => {
+      return updateRoomChannel(roomId, channelId, updates)
+    }
+  )
+
+  ipcMain.handle(
+    ROOM_IPC_CHANNELS.DELETE_CHANNEL,
+    async (_, roomId: string, channelId: string): Promise<void> => {
+      deleteRoomChannel(roomId, channelId)
+    }
+  )
+
+  ipcMain.handle(
+    ROOM_IPC_CHANNELS.LIST_MEMBERS,
+    async (_, roomId: string): Promise<RoomMemberConfig[]> => {
+      return listRoomMembers(roomId)
+    }
+  )
+
+  ipcMain.handle(
+    ROOM_IPC_CHANNELS.SAVE_MEMBER,
+    async (_, input: RoomMemberSaveInput): Promise<RoomMemberConfig> => {
+      return saveRoomMember(input)
+    }
+  )
+
+  ipcMain.handle(
+    ROOM_IPC_CHANNELS.DELETE_MEMBER,
+    async (_, roomId: string, memberId: string): Promise<void> => {
+      deleteRoomMember(roomId, memberId)
+    }
+  )
+
+  ipcMain.handle(
+    ROOM_IPC_CHANNELS.GET_MESSAGES,
+    async (_, roomId: string, roomChannelId?: string): Promise<RoomMessage[]> => {
+      return getRoomMessages(roomId, roomChannelId)
+    }
+  )
+
+  ipcMain.handle(
+    ROOM_IPC_CHANNELS.SEND_MESSAGE,
+    async (event, input: RoomSendMessageInput): Promise<RoomMessage[]> => {
+      const result = sendRoomMessage(input)
+      for (const plan of result.runPlans) {
+        if (plan.channelId) {
+          setTimeout(() => {
+            enqueueRoomAgentPlan(plan, event.sender, '后台')
+          }, 0)
+        }
+      }
+      return getRoomMessages(input.roomId, input.roomChannelId)
+    }
+  )
+
+  ipcMain.handle(
+    ROOM_IPC_CHANNELS.LIST_DRAFTS,
+    async (_, roomId: string): Promise<RoomDraft[]> => {
+      return listRoomDrafts(roomId)
+    }
+  )
+
+  ipcMain.handle(
+    ROOM_IPC_CHANNELS.UPDATE_DRAFT,
+    async (_, input: RoomUpdateDraftInput): Promise<RoomDraft> => {
+      return updateRoomDraft(input)
     }
   )
 

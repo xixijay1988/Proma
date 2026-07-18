@@ -38,7 +38,7 @@ export function useOpenSession(): OpenSessionFn {
 
       if (type === 'chat') {
         setCurrentConversationId(sessionId)
-      } else {
+      } else if (type === 'agent') {
         setCurrentAgentSessionId(sessionId)
 
         // 清除该会话的"已完成未查看"标记，与 TabBar.handleActivate 保持一致
@@ -57,6 +57,9 @@ export function useOpenSession(): OpenSessionFn {
             agentWorkspaceId: session.workspaceId,
           }).catch(console.error)
         }
+      } else {
+        setCurrentConversationId(null)
+        setCurrentAgentSessionId(null)
       }
     },
     [tabs, setTabs, setActiveTabId, setAppMode, setCurrentConversationId, setCurrentAgentSessionId, agentSessions, setCurrentAgentWorkspaceId, setUnviewedCompleted],

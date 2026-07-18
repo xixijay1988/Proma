@@ -9,7 +9,7 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { useAtomValue } from 'jotai'
-import { MessageSquare, Bot, StickyNote, X } from 'lucide-react'
+import { MessageSquare, Bot, StickyNote, UsersRound, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { TabType, TabMinimapItem } from '@/atoms/tab-atoms'
 import type { SessionIndicatorStatus } from '@/atoms/agent-atoms'
@@ -86,7 +86,7 @@ export function TabBarItem({
     onClose()
   }
 
-  const Icon = type === 'chat' ? MessageSquare : type === 'agent' ? Bot : StickyNote
+  const Icon = type === 'chat' ? MessageSquare : type === 'agent' ? Bot : type === 'room' ? UsersRound : StickyNote
   const isScratch = type === 'scratch'
   const indicatorColor = isScratch
     ? undefined

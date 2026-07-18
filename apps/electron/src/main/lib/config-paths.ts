@@ -240,6 +240,116 @@ export function getAgentSessionMessagesPath(id: string): string {
 }
 
 /**
+ * 获取 Room 索引文件路径
+ *
+ * @returns ~/.proma/rooms.json
+ */
+export function getRoomsIndexPath(): string {
+  return join(getConfigDir(), 'rooms.json')
+}
+
+/**
+ * 获取 Room 根目录路径
+ *
+ * 如果目录不存在则自动创建。
+ *
+ * @returns ~/.proma/rooms/
+ */
+export function getRoomsDir(): string {
+  const dir = join(getConfigDir(), 'rooms')
+
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+    console.log(`[配置] 已创建 Room 目录: ${dir}`)
+  }
+
+  return dir
+}
+
+/**
+ * 获取指定 Room 的消息文件路径
+ *
+ * @param id Room ID
+ * @returns ~/.proma/rooms/{id}.jsonl
+ */
+export function getRoomMessagesPath(id: string): string {
+  return join(getRoomsDir(), `${id}.jsonl`)
+}
+
+/**
+ * 获取指定 Room 的资源目录路径
+ *
+ * @param id Room ID
+ * @returns ~/.proma/rooms/{id}/
+ */
+export function getRoomDir(id: string): string {
+  const dir = join(getRoomsDir(), id)
+
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+  }
+
+  return dir
+}
+
+/**
+ * 获取指定 Room 的成员配置文件路径
+ *
+ * @param id Room ID
+ * @returns ~/.proma/rooms/{id}/members.json
+ */
+export function getRoomMembersPath(id: string): string {
+  return join(getRoomDir(id), 'members.json')
+}
+
+/**
+ * 获取指定 Room 的频道配置文件路径
+ *
+ * @param id Room ID
+ * @returns ~/.proma/rooms/{id}/channels.json
+ */
+export function getRoomChannelsPath(id: string): string {
+  return join(getRoomDir(id), 'channels.json')
+}
+
+/**
+ * 获取指定 Room 的摘要文件路径
+ *
+ * @param id Room ID
+ * @returns ~/.proma/rooms/{id}/summary.md
+ */
+export function getRoomSummaryPath(id: string): string {
+  return join(getRoomDir(id), 'summary.md')
+}
+
+/**
+ * 获取指定 Room 的草稿目录路径
+ *
+ * @param id Room ID
+ * @returns ~/.proma/rooms/{id}/drafts/
+ */
+export function getRoomDraftsDir(id: string): string {
+  const dir = join(getRoomDir(id), 'drafts')
+
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true })
+  }
+
+  return dir
+}
+
+/**
+ * 获取指定 Room 草稿文件路径
+ *
+ * @param roomId Room ID
+ * @param draftId 草稿 ID
+ * @returns ~/.proma/rooms/{roomId}/drafts/{draftId}.json
+ */
+export function getRoomDraftPath(roomId: string, draftId: string): string {
+  return join(getRoomDraftsDir(roomId), `${draftId}.json`)
+}
+
+/**
  * 获取 Agent 工作区索引文件路径
  *
  * @returns ~/.proma/agent-workspaces.json

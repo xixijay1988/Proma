@@ -14,6 +14,7 @@ import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { Loader2 } from 'lucide-react'
 import { appModeAtom } from '@/atoms/app-mode'
 import { currentAgentWorkspaceIdAtom, agentSettingsReadyAtom } from '@/atoms/agent-atoms'
+import { roomsAtom } from '@/atoms/room-atoms'
 import { tabsAtom, activeTabIdAtom, openTab } from '@/atoms/tab-atoms'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { useCreateSession } from '@/hooks/useCreateSession'
@@ -24,6 +25,7 @@ export function WelcomeView(): React.ReactElement {
   const agentSettingsReady = useAtomValue(agentSettingsReadyAtom)
   const draftSessionIds = useAtomValue(draftSessionIdsAtom)
   const [tabs, setTabs] = useAtom(tabsAtom)
+  const [, setRooms] = useAtom(roomsAtom)
   const setActiveTabId = useSetAtom(activeTabIdAtom)
   const { createChat, createAgent } = useCreateSession()
   const initRef = React.useRef<string | null>(null)
@@ -36,6 +38,7 @@ export function WelcomeView(): React.ReactElement {
     currentWorkspaceId,
     setTabs,
     setActiveTabId,
+    setRooms,
     createChat,
     createAgent,
   })
@@ -45,6 +48,7 @@ export function WelcomeView(): React.ReactElement {
     currentWorkspaceId,
     setTabs,
     setActiveTabId,
+    setRooms,
     createChat,
     createAgent,
   }
@@ -102,6 +106,26 @@ export function WelcomeView(): React.ReactElement {
         }
         // 3. 没有任何会话时才创建新的 draft 会话
         currentCreateChat({ draft: true })
+      }).catch(console.error)
+    } else if (currentMode === 'room') {
+      window.electronAPI.listRooms().then((freshRooms) => {
+        if (initRef.current !== currentMode) return
+        const {
+          tabs: currentTabs,
+          setTabs: currentSetTabs,
+          setActiveTabId: currentSetActiveTabId,
+          setRooms: currentSetRooms,
+        } = latestRef.current
+        currentSetRooms(freshRooms)
+        const room = freshRooms.find((item) => !item.archived) ?? freshRooms[0]
+        if (!room) return
+        const result = openTab(currentTabs, {
+          type: 'room',
+          sessionId: room.id,
+          title: room.title,
+        })
+        currentSetTabs(result.tabs)
+        currentSetActiveTabId(result.activeTabId)
       }).catch(console.error)
     } else {
       window.electronAPI.listAgentSessions().then((freshSessions) => {

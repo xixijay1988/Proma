@@ -6,7 +6,7 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS } from '@proma/shared'
+import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ROOM_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, MEMORY_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, WECHAT_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
   RuntimeStatus,
@@ -120,6 +120,19 @@ import type {
   WeChatBridgeState,
   AgentQueueMessageInput,
   PendingRequestsSnapshot,
+  RoomChannel,
+  RoomChannelCreateInput,
+  RoomChannelUpdateInput,
+  RoomCreateInput,
+  RoomDraft,
+  RoomMemberConfig,
+  RoomMemberSaveInput,
+  RoomMessage,
+  RoomMeta,
+  RoomSendMessageInput,
+  RoomStreamEvent,
+  RoomUpdateDraftInput,
+  RoomUpdateInput,
 } from '@proma/shared'
 import type {
   UserProfile,
@@ -418,6 +431,56 @@ export interface ElectronAPI {
 
   /** 订阅流式工具活动事件 */
   onStreamToolActivity: (callback: (event: StreamToolActivityEvent) => void) => () => void
+
+  // ===== Room 管理相关 =====
+
+  /** 获取 Room 列表 */
+  listRooms: () => Promise<RoomMeta[]>
+
+  /** 创建 Room */
+  createRoom: (input?: RoomCreateInput) => Promise<RoomMeta>
+
+  /** 更新 Room */
+  updateRoom: (id: string, updates: RoomUpdateInput) => Promise<RoomMeta>
+
+  /** 删除 Room */
+  deleteRoom: (id: string) => Promise<void>
+
+  /** 获取 Room 频道列表 */
+  listRoomChannels: (roomId: string) => Promise<RoomChannel[]>
+
+  /** 创建 Room 频道 */
+  createRoomChannel: (input: RoomChannelCreateInput) => Promise<RoomChannel>
+
+  /** 更新 Room 频道 */
+  updateRoomChannel: (roomId: string, channelId: string, updates: RoomChannelUpdateInput) => Promise<RoomChannel>
+
+  /** 删除 Room 频道 */
+  deleteRoomChannel: (roomId: string, channelId: string) => Promise<void>
+
+  /** 获取 Room 成员列表 */
+  listRoomMembers: (roomId: string) => Promise<RoomMemberConfig[]>
+
+  /** 保存 Room 成员 */
+  saveRoomMember: (input: RoomMemberSaveInput) => Promise<RoomMemberConfig>
+
+  /** 删除 Room 成员 */
+  deleteRoomMember: (roomId: string, memberId: string) => Promise<void>
+
+  /** 获取 Room 消息 */
+  getRoomMessages: (roomId: string, roomChannelId?: string) => Promise<RoomMessage[]>
+
+  /** 发送 Room 消息 */
+  sendRoomMessage: (input: RoomSendMessageInput) => Promise<RoomMessage[]>
+
+  /** 获取 Room 草稿 */
+  listRoomDrafts: (roomId: string) => Promise<RoomDraft[]>
+
+  /** 更新 Room 草稿 */
+  updateRoomDraft: (input: RoomUpdateDraftInput) => Promise<RoomDraft>
+
+  /** 订阅 Room 运行时事件 */
+  onRoomStreamEvent: (callback: (event: RoomStreamEvent) => void) => () => void
 
   // ===== Agent 会话管理相关 =====
 
@@ -1415,6 +1478,73 @@ const electronAPI: ElectronAPI = {
     const listener = (_: unknown, event: StreamToolActivityEvent): void => callback(event)
     ipcRenderer.on(CHAT_IPC_CHANNELS.STREAM_TOOL_ACTIVITY, listener)
     return () => { ipcRenderer.removeListener(CHAT_IPC_CHANNELS.STREAM_TOOL_ACTIVITY, listener) }
+  },
+
+  // Room 管理
+  listRooms: () => {
+    return ipcRenderer.invoke(ROOM_IPC_CHANNELS.LIST_ROOMS)
+  },
+
+  createRoom: (input?: RoomCreateInput) => {
+    return ipcRenderer.invoke(ROOM_IPC_CHANNELS.CREATE_ROOM, input)
+  },
+
+  updateRoom: (id: string, updates: RoomUpdateInput) => {
+    return ipcRenderer.invoke(ROOM_IPC_CHANNELS.UPDATE_ROOM, id, updates)
+  },
+
+  deleteRoom: (id: string) => {
+    return ipcRenderer.invoke(ROOM_IPC_CHANNELS.DELETE_ROOM, id)
+  },
+
+  listRoomChannels: (roomId: string) => {
+    return ipcRenderer.invoke(ROOM_IPC_CHANNELS.LIST_CHANNELS, roomId)
+  },
+
+  createRoomChannel: (input: RoomChannelCreateInput) => {
+    return ipcRenderer.invoke(ROOM_IPC_CHANNELS.CREATE_CHANNEL, input)
+  },
+
+  updateRoomChannel: (roomId: string, channelId: string, updates: RoomChannelUpdateInput) => {
+    return ipcRenderer.invoke(ROOM_IPC_CHANNELS.UPDATE_CHANNEL, roomId, channelId, updates)
+  },
+
+  deleteRoomChannel: (roomId: string, channelId: string) => {
+    return ipcRenderer.invoke(ROOM_IPC_CHANNELS.DELETE_CHANNEL, roomId, channelId)
+  },
+
+  listRoomMembers: (roomId: string) => {
+    return ipcRenderer.invoke(ROOM_IPC_CHANNELS.LIST_MEMBERS, roomId)
+  },
+
+  saveRoomMember: (input: RoomMemberSaveInput) => {
+    return ipcRenderer.invoke(ROOM_IPC_CHANNELS.SAVE_MEMBER, input)
+  },
+
+  deleteRoomMember: (roomId: string, memberId: string) => {
+    return ipcRenderer.invoke(ROOM_IPC_CHANNELS.DELETE_MEMBER, roomId, memberId)
+  },
+
+  getRoomMessages: (roomId: string, roomChannelId?: string) => {
+    return ipcRenderer.invoke(ROOM_IPC_CHANNELS.GET_MESSAGES, roomId, roomChannelId)
+  },
+
+  sendRoomMessage: (input: RoomSendMessageInput) => {
+    return ipcRenderer.invoke(ROOM_IPC_CHANNELS.SEND_MESSAGE, input)
+  },
+
+  listRoomDrafts: (roomId: string) => {
+    return ipcRenderer.invoke(ROOM_IPC_CHANNELS.LIST_DRAFTS, roomId)
+  },
+
+  updateRoomDraft: (input: RoomUpdateDraftInput) => {
+    return ipcRenderer.invoke(ROOM_IPC_CHANNELS.UPDATE_DRAFT, input)
+  },
+
+  onRoomStreamEvent: (callback: (event: RoomStreamEvent) => void) => {
+    const listener = (_: unknown, event: RoomStreamEvent): void => callback(event)
+    ipcRenderer.on(ROOM_IPC_CHANNELS.STREAM_EVENT, listener)
+    return () => { ipcRenderer.removeListener(ROOM_IPC_CHANNELS.STREAM_EVENT, listener) }
   },
 
   // Agent 会话管理

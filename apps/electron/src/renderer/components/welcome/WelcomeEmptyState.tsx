@@ -9,7 +9,7 @@
 
 import * as React from 'react'
 import { useAtomValue, useAtom } from 'jotai'
-import { Lightbulb, MessageSquare, Bot, StickyNote } from 'lucide-react'
+import { Lightbulb, MessageSquare, Bot, StickyNote, UsersRound } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { appModeAtom, type AppMode } from '@/atoms/app-mode'
@@ -28,6 +28,7 @@ function getGreeting(hour: number): string {
 const MODE_CONFIG: Record<AppMode, { icon: React.ReactNode; label: string }> = {
   chat: { icon: <MessageSquare size={15} />, label: 'Chat' },
   agent: { icon: <Bot size={15} />, label: 'Agent' },
+  room: { icon: <UsersRound size={15} />, label: 'Room' },
   scratch: { icon: <StickyNote size={15} />, label: 'Scratch Pad' },
 }
 
@@ -70,11 +71,11 @@ export function WelcomeEmptyState(): React.ReactElement {
         {/* 滑动背景指示器 */}
         <div
           className={cn(
-            'absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-lg bg-background shadow-sm transition-transform duration-300 ease-in-out',
-            mode === 'agent' ? 'translate-x-0' : 'translate-x-full',
+            'absolute top-1 bottom-1 w-[calc(33.333%-4px)] rounded-lg bg-background shadow-sm transition-transform duration-300 ease-in-out',
+            mode === 'agent' ? 'translate-x-0' : mode === 'room' ? 'translate-x-full' : 'translate-x-[200%]',
           )}
         />
-        {(['agent', 'chat'] as const).map((m) => {
+        {(['agent', 'room', 'chat'] as const).map((m) => {
           const config = MODE_CONFIG[m]
           const isSelected = mode === m
           return (

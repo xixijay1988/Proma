@@ -21,7 +21,7 @@ import type { SessionIndicatorStatus } from './agent-atoms'
 // ===== 类型定义 =====
 
 /** 标签页类型（Settings 不作为 Tab，保留独立视图） */
-export type TabType = 'chat' | 'agent' | 'scratch'
+export type TabType = 'chat' | 'agent' | 'room' | 'scratch'
 
 /** Scratch Pad 专用的固定 sessionId */
 export const SCRATCH_PAD_ID = '__scratch-pad__'
@@ -35,7 +35,7 @@ export interface TabItem {
   id: string
   /** 标签页类型 */
   type: TabType
-  /** Chat conversationId 或 Agent sessionId */
+  /** Chat conversationId、Agent sessionId、Room roomId 或 Scratch 固定 ID */
   sessionId: string
   /** 标签页显示标题 */
   title: string

@@ -24,6 +24,9 @@ export * from './chat'
 // Agent 相关类型
 export * from './agent'
 
+// Agent Room 相关类型
+export * from './room'
+
 // Agent Provider 适配器接口
 export * from './agent-provider'
 
